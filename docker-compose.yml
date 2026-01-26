@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rota
+      POSTGRES_PASSWORD: rota_password
+      POSTGRES_DB: rota
+    ports:
+      - "5432:5432"
+    volumes:
+      - rota-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rota -d rota"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rota:
+    build:
+      context: .
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: rota
+      DB_PASSWORD: rota_password
+      DB_NAME: rota
+      DB_SSLMODE: disable
+
+      PROXY_HOST: 0.0.0.0
+      PROXY_PORT: "8000"
+      API_HOST: 0.0.0.0
+      API_PORT: "8001"
+
+      JWT_SECRET: dev-secret-change-me
+      ROTA_ADMIN_USER: admin
+      ROTA_ADMIN_PASSWORD: admin
+
+      RUST_LOG: rota=info,tower_http=debug
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  rota-db:
