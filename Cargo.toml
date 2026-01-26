@@ -2,6 +2,7 @@
 name = "rota"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 authors = ["Rota Contributors"]
 description = "High-performance proxy rotation system"
 license = "MIT"

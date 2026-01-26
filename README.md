@@ -6,7 +6,7 @@ A high-performance proxy rotation server written in Rust, ported from Go. Rota p
 
 ### Prerequisites
 
-- Rust 1.70 or higher
+- Rust 1.88 or higher
 - PostgreSQL 12 or higher
 - Optional: TimescaleDB extension for advanced time-series features
 
