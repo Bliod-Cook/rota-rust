@@ -142,31 +142,38 @@ impl Drop for TunnelGuard {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_copy_bidirectional() {
         // Create a pair of duplex streams for testing
-        let (client, server) = tokio::io::duplex(1024);
-        let (target_client, target_server) = tokio::io::duplex(1024);
+        let (client, mut server) = tokio::io::duplex(1024);
+        let (mut target_client, target_server) = tokio::io::duplex(1024);
 
         // Spawn the bidirectional copy
         let copy_handle = tokio::spawn(async move {
             TunnelHandler::copy_bidirectional(client, target_server).await
         });
 
-        // Write from server side, read from target side
-        let mut server = server;
-        let mut target_client = target_client;
-
         server.write_all(b"hello from client").await.unwrap();
         server.shutdown().await.unwrap();
+
+        target_client.write_all(b"hello from server").await.unwrap();
+        target_client.shutdown().await.unwrap();
 
         let mut buf = vec![0u8; 100];
         let n = target_client.read(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], b"hello from client");
 
-        // Wait for copy to complete
-        let result = copy_handle.await.unwrap();
+        let mut buf = vec![0u8; 100];
+        let n = server.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"hello from server");
+
+        // Wait for copy to complete (should not hang)
+        let result = tokio::time::timeout(Duration::from_secs(1), copy_handle)
+            .await
+            .expect("copy_bidirectional timed out")
+            .unwrap();
         assert!(result.is_ok());
     }
 }

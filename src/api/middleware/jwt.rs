@@ -199,6 +199,16 @@ mod tests {
     }
 
     #[test]
+    fn test_jwt_expired_token() {
+        let auth = JwtAuth::new("test-secret");
+
+        // Expired 1 hour ago
+        let token = auth.generate_token("user123", -1).unwrap();
+        let result = auth.validate_token(&token);
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[test]
     fn test_extract_token() {
         assert_eq!(
             JwtAuth::extract_token("Bearer abc123"),

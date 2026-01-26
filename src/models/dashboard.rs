@@ -121,3 +121,62 @@ pub struct HealthStatus {
     pub uptime: u64,
     pub database: DatabaseHealth,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chart_time_range_start_end_override() {
+        let start = Utc::now() - chrono::Duration::hours(2);
+        let end = Utc::now() - chrono::Duration::hours(1);
+
+        let range = ChartTimeRange {
+            range: Some("1h".to_string()),
+            start: Some(start),
+            end: Some(end),
+        };
+
+        assert_eq!(range.start_time(), start);
+        assert_eq!(range.end_time(), end);
+    }
+
+    #[test]
+    fn test_chart_time_range_interval_mapping() {
+        let mut range = ChartTimeRange::default();
+
+        range.range = Some("1h".to_string());
+        assert_eq!(range.interval(), "1 minute");
+
+        range.range = Some("6h".to_string());
+        assert_eq!(range.interval(), "5 minutes");
+
+        range.range = Some("24h".to_string());
+        assert_eq!(range.interval(), "1 hour");
+
+        range.range = Some("7d".to_string());
+        assert_eq!(range.interval(), "6 hours");
+
+        range.range = Some("30d".to_string());
+        assert_eq!(range.interval(), "1 day");
+
+        range.range = Some("unknown".to_string());
+        assert_eq!(range.interval(), "1 hour");
+    }
+
+    #[test]
+    fn test_chart_time_range_start_time_range() {
+        let range = ChartTimeRange {
+            range: Some("1h".to_string()),
+            start: None,
+            end: None,
+        };
+
+        let start = range.start_time();
+        let now = Utc::now();
+        let delta = now - start;
+
+        assert!(delta >= chrono::Duration::minutes(59));
+        assert!(delta <= chrono::Duration::minutes(61));
+    }
+}

@@ -127,3 +127,81 @@ pub fn create_selector(strategy: RotationStrategy) -> Box<dyn ProxySelector> {
         RotationStrategy::TimeBased => Box::new(TimeBasedSelector::new()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rotation_strategy_from_str() {
+        assert_eq!(RotationStrategy::from_str("random"), RotationStrategy::Random);
+        assert_eq!(
+            RotationStrategy::from_str("round-robin"),
+            RotationStrategy::RoundRobin
+        );
+        assert_eq!(
+            RotationStrategy::from_str("least_conn"),
+            RotationStrategy::LeastConnections
+        );
+        assert_eq!(
+            RotationStrategy::from_str("timebased"),
+            RotationStrategy::TimeBased
+        );
+        assert_eq!(
+            RotationStrategy::from_str("unknown"),
+            RotationStrategy::Random
+        );
+    }
+
+    #[test]
+    fn test_rotation_strategy_as_str() {
+        assert_eq!(RotationStrategy::Random.as_str(), "random");
+        assert_eq!(RotationStrategy::RoundRobin.as_str(), "round_robin");
+        assert_eq!(
+            RotationStrategy::LeastConnections.as_str(),
+            "least_connections"
+        );
+        assert_eq!(RotationStrategy::TimeBased.as_str(), "time_based");
+    }
+
+    #[test]
+    fn test_create_selector_strategy_name() {
+        assert_eq!(
+            create_selector(RotationStrategy::Random).strategy_name(),
+            "random"
+        );
+        assert_eq!(
+            create_selector(RotationStrategy::RoundRobin).strategy_name(),
+            "round_robin"
+        );
+        assert_eq!(
+            create_selector(RotationStrategy::LeastConnections).strategy_name(),
+            "least_connections"
+        );
+        assert_eq!(
+            create_selector(RotationStrategy::TimeBased).strategy_name(),
+            "time_based"
+        );
+    }
+
+    #[test]
+    fn test_connection_tracker_counts() {
+        let tracker = ConnectionTracker::new();
+
+        assert_eq!(tracker.get(1), 0);
+        tracker.acquire(1);
+        tracker.acquire(1);
+        assert_eq!(tracker.get(1), 2);
+
+        tracker.release(1);
+        assert_eq!(tracker.get(1), 1);
+
+        tracker.release(1);
+        tracker.release(1);
+        assert_eq!(tracker.get(1), 0);
+
+        tracker.acquire(1);
+        tracker.clear();
+        assert_eq!(tracker.get(1), 0);
+    }
+}

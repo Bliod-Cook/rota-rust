@@ -144,3 +144,56 @@ pub struct RequestRecord {
     pub error_message: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_level_parsing_and_display() {
+        assert_eq!(LogLevel::from_str("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_str("INFO"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_str("warn"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_str("warning"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_str("error"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::from_str("success"), Some(LogLevel::Success));
+        assert_eq!(LogLevel::from_str("unknown"), None);
+
+        assert_eq!(LogLevel::Warning.to_string(), "warning");
+    }
+
+    #[test]
+    fn test_create_log_request_builders() {
+        let req = CreateLogRequest::info("hello");
+        assert_eq!(req.level, LogLevel::Info);
+        assert_eq!(req.message, "hello");
+        assert!(req.details.is_none());
+        assert!(req.metadata.is_none());
+
+        let req = CreateLogRequest::error("oops").with_details("details");
+        assert_eq!(req.level, LogLevel::Error);
+        assert_eq!(req.details.as_deref(), Some("details"));
+
+        let req = CreateLogRequest::success("ok")
+            .with_metadata("proxy_id", serde_json::json!(123))
+            .with_metadata("status", serde_json::json!("idle"));
+
+        let metadata = req.metadata.unwrap();
+        assert_eq!(metadata.get("proxy_id"), Some(&serde_json::json!(123)));
+        assert_eq!(metadata.get("status"), Some(&serde_json::json!("idle")));
+    }
+
+    #[test]
+    fn test_log_level_enum() {
+        let log = Log {
+            id: 1,
+            timestamp: Utc::now(),
+            level: "info".to_string(),
+            message: "message".to_string(),
+            details: None,
+            metadata: None,
+        };
+
+        assert_eq!(log.level_enum(), Some(LogLevel::Info));
+    }
+}

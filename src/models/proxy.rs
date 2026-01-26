@@ -271,3 +271,142 @@ impl<T> PaginatedResponse<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::RotationSettings;
+
+    fn base_proxy() -> Proxy {
+        Proxy {
+            id: 1,
+            address: "127.0.0.1:8080".to_string(),
+            protocol: "http".to_string(),
+            username: None,
+            password: None,
+            status: "idle".to_string(),
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            avg_response_time: 0,
+            last_check: None,
+            last_error: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_proxy_protocol_parsing_and_helpers() {
+        assert_eq!(ProxyProtocol::from_str("HTTP"), Some(ProxyProtocol::Http));
+        assert_eq!(ProxyProtocol::from_str("https"), Some(ProxyProtocol::Https));
+        assert_eq!(ProxyProtocol::from_str("SOCKS4A"), Some(ProxyProtocol::Socks4a));
+        assert_eq!(ProxyProtocol::from_str("unknown"), None);
+
+        assert!(ProxyProtocol::Socks5.is_socks());
+        assert!(!ProxyProtocol::Https.is_socks());
+        assert!(ProxyProtocol::Https.is_http());
+        assert!(!ProxyProtocol::Socks4.is_http());
+
+        assert_eq!(ProxyProtocol::Socks4.to_string(), "socks4");
+    }
+
+    #[test]
+    fn test_proxy_status_parsing_and_is_usable() {
+        assert_eq!(ProxyStatus::from_str("idle"), Some(ProxyStatus::Idle));
+        assert_eq!(ProxyStatus::from_str("ACTIVE"), Some(ProxyStatus::Active));
+        assert_eq!(ProxyStatus::from_str("failed"), Some(ProxyStatus::Failed));
+        assert_eq!(ProxyStatus::from_str("unknown"), None);
+
+        assert!(ProxyStatus::Idle.is_usable());
+        assert!(ProxyStatus::Active.is_usable());
+        assert!(!ProxyStatus::Failed.is_usable());
+
+        assert_eq!(ProxyStatus::Active.to_string(), "active");
+    }
+
+    #[test]
+    fn test_proxy_success_rate_and_is_usable() {
+        let mut proxy = base_proxy();
+        assert_eq!(proxy.success_rate(), 0.0);
+        assert!(proxy.is_usable());
+
+        proxy.requests = 10;
+        proxy.successful_requests = 7;
+        assert!((proxy.success_rate() - 70.0).abs() < 1e-9);
+
+        proxy.status = "failed".to_string();
+        assert!(!proxy.is_usable());
+
+        proxy.status = "invalid".to_string();
+        assert!(!proxy.is_usable());
+    }
+
+    #[test]
+    fn test_proxy_matches_filter() {
+        let mut proxy = base_proxy();
+        proxy.protocol = "http".to_string();
+        proxy.avg_response_time = 200;
+        proxy.requests = 10;
+        proxy.successful_requests = 5;
+
+        let mut settings = RotationSettings::default();
+
+        settings.allowed_protocols = vec!["http".to_string()];
+        assert!(proxy.matches_filter(&settings));
+
+        settings.allowed_protocols = vec!["socks5".to_string()];
+        assert!(!proxy.matches_filter(&settings));
+
+        settings.allowed_protocols.clear();
+        settings.max_response_time = 100;
+        assert!(!proxy.matches_filter(&settings));
+
+        settings.max_response_time = 0;
+        settings.min_success_rate = 60.0;
+        assert!(!proxy.matches_filter(&settings));
+    }
+
+    #[test]
+    fn test_proxy_url_formats() {
+        let mut proxy = base_proxy();
+        proxy.address = "1.2.3.4:1234".to_string();
+
+        proxy.protocol = "http".to_string();
+        assert_eq!(proxy.url(), "http://1.2.3.4:1234");
+
+        proxy.protocol = "https".to_string();
+        assert_eq!(proxy.url(), "http://1.2.3.4:1234");
+
+        proxy.protocol = "socks5".to_string();
+        assert_eq!(proxy.url(), "socks5://1.2.3.4:1234");
+    }
+
+    #[test]
+    fn test_proxy_url_with_auth() {
+        let mut proxy = base_proxy();
+        proxy.address = "1.2.3.4:1234".to_string();
+
+        proxy.username = Some("user".to_string());
+        proxy.password = Some("pass".to_string());
+        assert_eq!(proxy.url(), "http://user:pass@1.2.3.4:1234");
+
+        proxy.password = None;
+        assert_eq!(proxy.url(), "http://user@1.2.3.4:1234");
+    }
+
+    #[test]
+    fn test_paginated_response_total_pages() {
+        let resp = PaginatedResponse::new(vec![1, 2, 3], 0, 1, 10);
+        assert_eq!(resp.total_pages, 0);
+
+        let resp = PaginatedResponse::new(vec![1], 1, 1, 10);
+        assert_eq!(resp.total_pages, 1);
+
+        let resp = PaginatedResponse::new(vec![1; 10], 10, 1, 10);
+        assert_eq!(resp.total_pages, 1);
+
+        let resp = PaginatedResponse::new(vec![1; 10], 11, 1, 10);
+        assert_eq!(resp.total_pages, 2);
+    }
+}

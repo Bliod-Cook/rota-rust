@@ -215,6 +215,12 @@ impl ProxyTransport {
 
     /// Parse host and port from authority (for CONNECT requests)
     pub fn parse_authority(authority: &str) -> Result<(String, u16)> {
+        // Bracketed IPv6 without an explicit port: "[::1]"
+        if authority.starts_with('[') && authority.ends_with(']') {
+            // Default to port 443 for CONNECT (typically HTTPS)
+            return Ok((authority.to_string(), 443));
+        }
+
         if let Some((host, port_str)) = authority.rsplit_once(':') {
             let port = port_str
                 .parse::<u16>()
@@ -307,3 +313,67 @@ impl AsyncWrite for Socks5Connection {
 }
 
 impl ProxyConnection for Socks5Connection {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_target_defaults() {
+        let uri: Uri = "http://example.com/path".parse().unwrap();
+        let (host, port) = ProxyTransport::parse_target(&uri).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 80);
+
+        let uri: Uri = "https://example.com/path".parse().unwrap();
+        let (host, port) = ProxyTransport::parse_target(&uri).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn test_parse_target_explicit_port() {
+        let uri: Uri = "http://example.com:1234/path".parse().unwrap();
+        let (host, port) = ProxyTransport::parse_target(&uri).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 1234);
+    }
+
+    #[test]
+    fn test_parse_target_missing_host() {
+        let uri: Uri = "/relative/path".parse().unwrap();
+        let err = ProxyTransport::parse_target(&uri).unwrap_err();
+        assert!(matches!(err, RotaError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn test_parse_authority_host_and_port() {
+        let (host, port) = ProxyTransport::parse_authority("example.com:8080").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn test_parse_authority_default_port() {
+        let (host, port) = ProxyTransport::parse_authority("example.com").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+
+        let (host, port) = ProxyTransport::parse_authority("[::1]").unwrap();
+        assert_eq!(host, "[::1]");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn test_parse_authority_ipv6() {
+        let (host, port) = ProxyTransport::parse_authority("[::1]:8443").unwrap();
+        assert_eq!(host, "[::1]");
+        assert_eq!(port, 8443);
+    }
+
+    #[test]
+    fn test_parse_authority_invalid_port() {
+        let err = ProxyTransport::parse_authority("example.com:not-a-number").unwrap_err();
+        assert!(matches!(err, RotaError::InvalidRequest(_)));
+    }
+}

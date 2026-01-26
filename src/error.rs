@@ -189,3 +189,49 @@ impl From<url::ParseError> for RotaError {
         RotaError::InvalidProxyAddress(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_status_code_mapping() {
+        assert_eq!(
+            RotaError::InvalidRequest("bad".to_string()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            RotaError::InvalidProxyAddress("bad".to_string()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            RotaError::AuthenticationFailed.status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            RotaError::ProxyNotFound { id: 1 }.status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            RotaError::RateLimitExceeded {
+                client_ip: "127.0.0.1".to_string()
+            }
+            .status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(RotaError::Timeout.status_code(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(
+            RotaError::NoProxiesAvailable.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn test_error_client_server_helpers() {
+        assert!(RotaError::InvalidRequest("bad".to_string()).is_client_error());
+        assert!(!RotaError::InvalidRequest("bad".to_string()).is_server_error());
+
+        assert!(RotaError::NoProxiesAvailable.is_server_error());
+        assert!(!RotaError::NoProxiesAvailable.is_client_error());
+    }
+}

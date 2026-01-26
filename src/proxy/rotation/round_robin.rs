@@ -78,20 +78,21 @@ impl ProxySelector for RoundRobinSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ProxyProtocol;
 
-    fn create_test_proxy(id: i64, name: &str) -> Proxy {
+    fn create_test_proxy(id: i32, address: &str) -> Proxy {
         Proxy {
             id,
-            name: name.to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            protocol: ProxyProtocol::Http,
+            address: address.to_string(),
+            protocol: "http".to_string(),
             username: None,
             password: None,
-            enabled: true,
-            healthy: true,
-            last_health_check: None,
+            status: "idle".to_string(),
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            avg_response_time: 0,
+            last_check: None,
+            last_error: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -108,9 +109,9 @@ mod tests {
     async fn test_round_robin_order() {
         let selector = RoundRobinSelector::new();
         let proxies = vec![
-            create_test_proxy(1, "proxy1"),
-            create_test_proxy(2, "proxy2"),
-            create_test_proxy(3, "proxy3"),
+            create_test_proxy(1, "127.0.0.1:8081"),
+            create_test_proxy(2, "127.0.0.1:8082"),
+            create_test_proxy(3, "127.0.0.1:8083"),
         ];
         selector.refresh(proxies).await.unwrap();
 
@@ -127,8 +128,8 @@ mod tests {
     async fn test_round_robin_refresh_resets_index() {
         let selector = RoundRobinSelector::new();
         let proxies = vec![
-            create_test_proxy(1, "proxy1"),
-            create_test_proxy(2, "proxy2"),
+            create_test_proxy(1, "127.0.0.1:8081"),
+            create_test_proxy(2, "127.0.0.1:8082"),
         ];
         selector.refresh(proxies).await.unwrap();
 
@@ -138,8 +139,8 @@ mod tests {
 
         // Refresh should reset
         let new_proxies = vec![
-            create_test_proxy(10, "proxy10"),
-            create_test_proxy(20, "proxy20"),
+            create_test_proxy(10, "127.0.0.1:8091"),
+            create_test_proxy(20, "127.0.0.1:8092"),
         ];
         selector.refresh(new_proxies).await.unwrap();
 

@@ -82,7 +82,6 @@ impl ProxySelector for LeastConnectionsSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ProxyProtocol;
 
     fn create_test_proxy(id: i32, _name: &str) -> Proxy {
         Proxy {

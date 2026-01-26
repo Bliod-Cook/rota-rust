@@ -191,14 +191,174 @@ fn get_env_or(key: &str, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const CONFIG_ENV_KEYS: &[&str] = &[
+        "PROXY_PORT",
+        "PROXY_HOST",
+        "PROXY_MAX_RETRIES",
+        "PROXY_CONNECT_TIMEOUT",
+        "PROXY_REQUEST_TIMEOUT",
+        "PROXY_AUTH_ENABLED",
+        "PROXY_AUTH_USERNAME",
+        "PROXY_AUTH_PASSWORD",
+        "PROXY_RATE_LIMIT_ENABLED",
+        "PROXY_RATE_LIMIT_PER_SECOND",
+        "PROXY_RATE_LIMIT_BURST",
+        "PROXY_ROTATION_STRATEGY",
+        "API_PORT",
+        "API_HOST",
+        "CORS_ORIGINS",
+        "JWT_SECRET",
+        "DB_HOST",
+        "DB_PORT",
+        "DB_USER",
+        "DB_PASSWORD",
+        "DB_NAME",
+        "DB_SSLMODE",
+        "DB_MAX_CONNECTIONS",
+        "DB_MIN_CONNECTIONS",
+        "ROTA_ADMIN_USER",
+        "ROTA_ADMIN_PASSWORD",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+    ];
+
+    struct EnvGuard {
+        saved: Vec<(String, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new(keys: &[&str]) -> Self {
+            let saved = keys
+                .iter()
+                .map(|&key| {
+                    let old = env::var(key).ok();
+                    env::remove_var(key);
+                    (key.to_string(), old)
+                })
+                .collect();
+
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in self.saved.drain(..) {
+                match value {
+                    Some(v) => env::set_var(key, v),
+                    None => env::remove_var(key),
+                }
+            }
+        }
+    }
 
     #[test]
-    fn test_config_defaults() {
-        // Clear any existing env vars for test isolation
+    fn test_config_from_env_defaults() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
         let config = Config::from_env().unwrap();
 
         assert_eq!(config.proxy.port, 8000);
+        assert_eq!(config.proxy.host, "0.0.0.0");
+        assert_eq!(config.proxy.rotation_strategy, "random");
+
         assert_eq!(config.api.port, 8001);
+        assert_eq!(config.api.host, "0.0.0.0");
+        assert!(config.api.cors_origins.is_empty());
+
         assert_eq!(config.database.host, "localhost");
+        assert_eq!(config.database.port, 5432);
+    }
+
+    #[test]
+    fn test_config_from_env_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("PROXY_PORT", "9000");
+        env::set_var("PROXY_HOST", "127.0.0.1");
+        env::set_var("PROXY_ROTATION_STRATEGY", "round_robin");
+        env::set_var("API_PORT", "9001");
+        env::set_var("CORS_ORIGINS", "https://a.example, https://b.example");
+        env::set_var("DB_HOST", "db.example");
+
+        let config = Config::from_env().unwrap();
+
+        assert_eq!(config.proxy.port, 9000);
+        assert_eq!(config.proxy.host, "127.0.0.1");
+        assert_eq!(config.proxy.rotation_strategy, "round_robin");
+        assert_eq!(config.api.port, 9001);
+        assert_eq!(
+            config.api.cors_origins,
+            vec!["https://a.example".to_string(), "https://b.example".to_string()]
+        );
+        assert_eq!(config.database.host, "db.example");
+    }
+
+    #[test]
+    fn test_config_from_env_invalid_port() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("PROXY_PORT", "not-a-port");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_config_formatters() {
+        let config = Config {
+            proxy: ProxyServerConfig {
+                port: 8000,
+                host: "0.0.0.0".to_string(),
+                max_retries: 3,
+                connect_timeout: 10,
+                request_timeout: 30,
+                auth_enabled: false,
+                auth_username: "".to_string(),
+                auth_password: "".to_string(),
+                rate_limit_enabled: false,
+                rate_limit_per_second: 100,
+                rate_limit_burst: 200,
+                rotation_strategy: "random".to_string(),
+            },
+            api: ApiServerConfig {
+                port: 8001,
+                host: "0.0.0.0".to_string(),
+                cors_origins: vec![],
+                jwt_secret: "".to_string(),
+            },
+            database: DatabaseConfig {
+                host: "localhost".to_string(),
+                port: 5432,
+                user: "rota".to_string(),
+                password: "rota_password".to_string(),
+                name: "rota".to_string(),
+                ssl_mode: "disable".to_string(),
+                max_connections: 50,
+                min_connections: 5,
+            },
+            admin: AdminConfig {
+                username: "admin".to_string(),
+                password: "admin".to_string(),
+            },
+            log: LogConfig {
+                level: "info".to_string(),
+                format: "json".to_string(),
+            },
+        };
+
+        assert_eq!(config.proxy_addr(), "0.0.0.0:8000");
+        assert_eq!(config.api_addr(), "0.0.0.0:8001");
+        assert_eq!(
+            config.database_url(),
+            "postgres://rota:rota_password@localhost:5432/rota?sslmode=disable"
+        );
     }
 }

@@ -135,21 +135,22 @@ impl ProxySelector for TimeBasedSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ProxyProtocol;
     use std::time::Duration;
 
-    fn create_test_proxy(id: i64, name: &str) -> Proxy {
+    fn create_test_proxy(id: i32, address: &str) -> Proxy {
         Proxy {
             id,
-            name: name.to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 8080,
-            protocol: ProxyProtocol::Http,
+            address: address.to_string(),
+            protocol: "http".to_string(),
             username: None,
             password: None,
-            enabled: true,
-            healthy: true,
-            last_health_check: None,
+            status: "idle".to_string(),
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            avg_response_time: 0,
+            last_check: None,
+            last_error: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -166,9 +167,9 @@ mod tests {
     async fn test_time_based_same_proxy_within_interval() {
         let selector = TimeBasedSelector::with_interval(Duration::from_secs(60));
         let proxies = vec![
-            create_test_proxy(1, "proxy1"),
-            create_test_proxy(2, "proxy2"),
-            create_test_proxy(3, "proxy3"),
+            create_test_proxy(1, "127.0.0.1:8081"),
+            create_test_proxy(2, "127.0.0.1:8082"),
+            create_test_proxy(3, "127.0.0.1:8083"),
         ];
         selector.refresh(proxies).await.unwrap();
 
@@ -182,19 +183,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_time_based_rotates_after_interval() {
-        // Use a very short interval for testing
-        let selector = TimeBasedSelector::with_interval(Duration::from_millis(10));
+        let selector = TimeBasedSelector::with_interval(Duration::from_secs(60));
         let proxies = vec![
-            create_test_proxy(1, "proxy1"),
-            create_test_proxy(2, "proxy2"),
+            create_test_proxy(1, "127.0.0.1:8081"),
+            create_test_proxy(2, "127.0.0.1:8082"),
         ];
         selector.refresh(proxies).await.unwrap();
 
         let first = selector.select().await.unwrap();
         assert_eq!(first.id, 1);
 
-        // Wait for interval to pass
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Fast-forward time by mutating the internal timestamp.
+        *selector.last_rotation.write() = Instant::now() - Duration::from_secs(61);
 
         let second = selector.select().await.unwrap();
         assert_eq!(second.id, 2);
@@ -207,5 +207,23 @@ mod tests {
 
         selector.set_interval(Duration::from_secs(120));
         assert_eq!(selector.get_interval(), Duration::from_secs(120));
+    }
+
+    #[tokio::test]
+    async fn test_time_based_refresh_adjusts_index() {
+        let selector = TimeBasedSelector::with_interval(Duration::from_secs(60));
+        let proxies = vec![
+            create_test_proxy(1, "127.0.0.1:8081"),
+            create_test_proxy(2, "127.0.0.1:8082"),
+        ];
+        selector.refresh(proxies).await.unwrap();
+
+        *selector.current_index.write() = 10;
+
+        let new_proxies = vec![create_test_proxy(99, "127.0.0.1:8099")];
+        selector.refresh(new_proxies).await.unwrap();
+
+        let selected = selector.select().await.unwrap();
+        assert_eq!(selected.id, 99);
     }
 }
