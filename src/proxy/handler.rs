@@ -9,6 +9,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::PROXY_AUTHORIZATION;
+use hyper::upgrade::OnUpgrade;
 use hyper::{Method, Request, Response, StatusCode};
 use sqlx::PgPool;
 use tokio::sync::broadcast;
@@ -113,6 +114,8 @@ impl ProxyHandler {
         let mut attempts = 0;
         let max_attempts = self.config.max_retries + 1;
         let mut last_error = None;
+        let mut selected: Option<(Arc<Proxy>, Box<dyn crate::proxy::transport::ProxyConnection>)> =
+            None;
 
         while attempts < max_attempts {
             attempts += 1;
@@ -126,23 +129,20 @@ impl ProxyHandler {
                 }
             };
 
-            // Create tunnel guard to track connection
-            let _guard = TunnelGuard::new(proxy.id as i64, self.selector.clone());
-
             debug!(
                 "Attempting CONNECT through proxy {} (attempt {}/{})",
                 proxy.address, attempts, max_attempts
             );
 
-            // Try to establish tunnel
+            // Try to establish tunnel (don't respond 200 until this succeeds)
             let attempt_start = Instant::now();
             match tokio::time::timeout(
                 self.config.connect_timeout,
-                TunnelHandler::tunnel_through_proxy(&proxy, &target_host, target_port),
+                ProxyTransport::connect(&proxy, &target_host, target_port),
             )
             .await
             {
-                Ok(Ok(_connection)) => {
+                Ok(Ok(connection)) => {
                     let attempt_duration = attempt_start.elapsed();
                     let record = RequestRecord {
                         proxy_id: proxy.id,
@@ -157,8 +157,10 @@ impl ProxyHandler {
                     };
                     self.persist_request_record(record);
 
-                    // Return 200 Connection Established
-                    // The actual tunneling will be handled after upgrade
+                    selected = Some((proxy.clone(), connection));
+
+                    // Return 200 Connection Established. The actual tunneling is handled after
+                    // the client upgrades the connection.
                     info!(
                         "CONNECT tunnel established through {} to {}:{}",
                         proxy.address, target_host, target_port
@@ -174,10 +176,7 @@ impl ProxyHandler {
                         None,
                     );
 
-                    return Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Full::new(Bytes::new()))
-                        .unwrap());
+                    break;
                 }
                 Ok(Err(e)) => {
                     let attempt_duration = attempt_start.elapsed();
@@ -224,17 +223,41 @@ impl ProxyHandler {
             }
         }
 
-        error!(
-            "All CONNECT attempts failed after {} attempts",
-            max_attempts
-        );
-        Ok(self.error_response(
-            StatusCode::BAD_GATEWAY,
-            &format!(
-                "Failed to establish tunnel: {}",
-                last_error.unwrap_or(RotaError::NoProxiesAvailable)
-            ),
-        ))
+        let Some((proxy, connection)) = selected else {
+            error!(
+                "All CONNECT attempts failed after {} attempts",
+                max_attempts
+            );
+            return Ok(self.error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!(
+                    "Failed to establish tunnel: {}",
+                    last_error.unwrap_or(RotaError::NoProxiesAvailable)
+                ),
+            ));
+        };
+
+        let on_upgrade: OnUpgrade = hyper::upgrade::on(req);
+        let _guard = TunnelGuard::new(proxy.id as i64, self.selector.clone());
+
+        tokio::spawn(async move {
+            let _guard = _guard;
+            match on_upgrade.await {
+                Ok(upgraded) => {
+                    let client = hyper_util::rt::TokioIo::new(upgraded);
+                    let _ = TunnelHandler::copy_bidirectional(client, connection).await;
+                }
+                Err(e) => {
+                    debug!("CONNECT upgrade failed: {}", e);
+                }
+            }
+        });
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Full::new(Bytes::new()))
+            .unwrap())
+
     }
 
     /// Handle regular HTTP request
