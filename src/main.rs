@@ -95,6 +95,7 @@ async fn main() -> error::Result<()> {
     let proxy_server = ProxyServer::new(
         config.proxy.clone(),
         selector.clone(),
+        db.pool().clone(),
         Some(log_sender.clone()),
     );
 

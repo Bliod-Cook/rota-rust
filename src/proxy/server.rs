@@ -13,6 +13,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, instrument};
@@ -39,6 +40,7 @@ impl ProxyServer {
     pub fn new(
         config: ProxyServerConfig,
         selector: Arc<dyn ProxySelector>,
+        db_pool: PgPool,
         log_sender: Option<broadcast::Sender<RequestRecord>>,
     ) -> Self {
         let handler_config = ProxyHandlerConfig {
@@ -48,7 +50,12 @@ impl ProxyServer {
             enable_logging: true,
         };
 
-        let handler = Arc::new(ProxyHandler::new(selector, handler_config, log_sender));
+        let handler = Arc::new(ProxyHandler::new(
+            selector,
+            handler_config,
+            log_sender,
+            db_pool,
+        ));
 
         let auth = if config.auth_enabled {
             ProxyAuth::new(
@@ -185,6 +192,7 @@ impl ProxyServer {
 pub struct ProxyServerBuilder {
     config: ProxyServerConfig,
     selector: Option<Arc<dyn ProxySelector>>,
+    db_pool: Option<PgPool>,
     log_sender: Option<broadcast::Sender<RequestRecord>>,
 }
 
@@ -193,12 +201,18 @@ impl ProxyServerBuilder {
         Self {
             config,
             selector: None,
+            db_pool: None,
             log_sender: None,
         }
     }
 
     pub fn selector(mut self, selector: Arc<dyn ProxySelector>) -> Self {
         self.selector = Some(selector);
+        self
+    }
+
+    pub fn database(mut self, db_pool: PgPool) -> Self {
+        self.db_pool = Some(db_pool);
         self
     }
 
@@ -209,6 +223,7 @@ impl ProxyServerBuilder {
 
     pub fn build(self) -> ProxyServer {
         let selector = self.selector.expect("Proxy selector is required");
-        ProxyServer::new(self.config, selector, self.log_sender)
+        let db_pool = self.db_pool.expect("Database pool is required");
+        ProxyServer::new(self.config, selector, db_pool, self.log_sender)
     }
 }

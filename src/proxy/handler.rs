@@ -10,6 +10,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::PROXY_AUTHORIZATION;
 use hyper::{Method, Request, Response, StatusCode};
+use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -18,6 +19,7 @@ use crate::models::{Proxy, RequestRecord};
 use crate::proxy::rotation::ProxySelector;
 use crate::proxy::transport::ProxyTransport;
 use crate::proxy::tunnel::{TunnelGuard, TunnelHandler};
+use crate::repository::{LogRepository, ProxyRepository};
 
 /// Configuration for proxy handler
 #[derive(Clone)]
@@ -48,6 +50,7 @@ pub struct ProxyHandler {
     selector: Arc<dyn ProxySelector>,
     config: ProxyHandlerConfig,
     log_sender: Option<broadcast::Sender<RequestRecord>>,
+    db_pool: PgPool,
 }
 
 impl ProxyHandler {
@@ -55,11 +58,13 @@ impl ProxyHandler {
         selector: Arc<dyn ProxySelector>,
         config: ProxyHandlerConfig,
         log_sender: Option<broadcast::Sender<RequestRecord>>,
+        db_pool: PgPool,
     ) -> Self {
         Self {
             selector,
             config,
             log_sender,
+            db_pool,
         }
     }
 
@@ -101,6 +106,9 @@ impl ProxyHandler {
             target_host, target_port, client_ip
         );
 
+        let method_str = "CONNECT".to_string();
+        let requested_url = authority.clone();
+
         // Select a proxy with retry logic
         let mut attempts = 0;
         let max_attempts = self.config.max_retries + 1;
@@ -127,6 +135,7 @@ impl ProxyHandler {
             );
 
             // Try to establish tunnel
+            let attempt_start = Instant::now();
             match tokio::time::timeout(
                 self.config.connect_timeout,
                 TunnelHandler::tunnel_through_proxy(&proxy, &target_host, target_port),
@@ -134,6 +143,20 @@ impl ProxyHandler {
             .await
             {
                 Ok(Ok(_connection)) => {
+                    let attempt_duration = attempt_start.elapsed();
+                    let record = RequestRecord {
+                        proxy_id: proxy.id,
+                        proxy_address: proxy.address.clone(),
+                        requested_url: requested_url.clone(),
+                        method: method_str.clone(),
+                        success: true,
+                        response_time: attempt_duration.as_millis() as i32,
+                        status_code: 200,
+                        error_message: None,
+                        timestamp: chrono::Utc::now(),
+                    };
+                    self.persist_request_record(record);
+
                     // Return 200 Connection Established
                     // The actual tunneling will be handled after upgrade
                     info!(
@@ -142,7 +165,14 @@ impl ProxyHandler {
                     );
 
                     // Log the request
-                    self.log_request("CONNECT", &authority, true, 0, Some(&proxy), None);
+                    self.log_request(
+                        "CONNECT",
+                        &authority,
+                        true,
+                        attempt_duration.as_millis() as i32,
+                        Some(&proxy),
+                        None,
+                    );
 
                     return Ok(Response::builder()
                         .status(StatusCode::OK)
@@ -150,6 +180,20 @@ impl ProxyHandler {
                         .unwrap());
                 }
                 Ok(Err(e)) => {
+                    let attempt_duration = attempt_start.elapsed();
+                    let record = RequestRecord {
+                        proxy_id: proxy.id,
+                        proxy_address: proxy.address.clone(),
+                        requested_url: requested_url.clone(),
+                        method: method_str.clone(),
+                        success: false,
+                        response_time: attempt_duration.as_millis() as i32,
+                        status_code: 502,
+                        error_message: Some(e.to_string()),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    self.persist_request_record(record);
+
                     warn!(
                         "CONNECT through {} failed: {} (attempt {}/{})",
                         proxy.address, e, attempts, max_attempts
@@ -157,6 +201,20 @@ impl ProxyHandler {
                     last_error = Some(e);
                 }
                 Err(_) => {
+                    let attempt_duration = attempt_start.elapsed();
+                    let record = RequestRecord {
+                        proxy_id: proxy.id,
+                        proxy_address: proxy.address.clone(),
+                        requested_url: requested_url.clone(),
+                        method: method_str.clone(),
+                        success: false,
+                        response_time: attempt_duration.as_millis() as i32,
+                        status_code: 502,
+                        error_message: Some(RotaError::Timeout.to_string()),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    self.persist_request_record(record);
+
                     warn!(
                         "CONNECT through {} timed out (attempt {}/{})",
                         proxy.address, attempts, max_attempts
@@ -189,6 +247,8 @@ impl ProxyHandler {
         let method = req.method().clone();
         let uri = req.uri().clone();
         let start = Instant::now();
+        let requested_url = uri.to_string();
+        let method_str = method.as_str().to_string();
 
         // Parse target from URI
         let (target_host, target_port) = ProxyTransport::parse_target(&uri)?;
@@ -226,6 +286,7 @@ impl ProxyHandler {
                 proxy.address, attempts, max_attempts
             );
 
+            let attempt_start = Instant::now();
             match self
                 .forward_request(
                     &proxy,
@@ -237,14 +298,30 @@ impl ProxyHandler {
                 .await
             {
                 Ok(response) => {
+                    let attempt_duration = attempt_start.elapsed();
+                    let status_code = response.status().as_u16() as i32;
+                    let success = status_code < 400;
+
+                    let record = RequestRecord {
+                        proxy_id: proxy.id,
+                        proxy_address: proxy.address.clone(),
+                        requested_url: requested_url.clone(),
+                        method: method_str.clone(),
+                        success,
+                        response_time: attempt_duration.as_millis() as i32,
+                        status_code,
+                        error_message: None,
+                        timestamp: chrono::Utc::now(),
+                    };
+                    self.persist_request_record(record);
+
                     let duration = start.elapsed();
-                    let status = response.status().as_u16();
 
                     // Log the request
                     self.log_request(
                         method.as_str(),
-                        &uri.to_string(),
-                        status < 400,
+                        &requested_url,
+                        success,
                         duration.as_millis() as i32,
                         Some(&proxy),
                         None,
@@ -253,6 +330,20 @@ impl ProxyHandler {
                     return Ok(response);
                 }
                 Err(e) => {
+                    let attempt_duration = attempt_start.elapsed();
+                    let record = RequestRecord {
+                        proxy_id: proxy.id,
+                        proxy_address: proxy.address.clone(),
+                        requested_url: requested_url.clone(),
+                        method: method_str.clone(),
+                        success: false,
+                        response_time: attempt_duration.as_millis() as i32,
+                        status_code: 502,
+                        error_message: Some(e.to_string()),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    self.persist_request_record(record);
+
                     warn!(
                         "Request through {} failed: {} (attempt {}/{})",
                         proxy.address, e, attempts, max_attempts
@@ -381,6 +472,41 @@ impl ProxyHandler {
             .to_bytes();
 
         Ok(Response::from_parts(parts, Full::new(body_bytes)))
+    }
+
+    fn persist_request_record(&self, record: RequestRecord) {
+        let pool = self.db_pool.clone();
+        tokio::spawn(async move {
+            let log_repo = LogRepository::new(pool.clone());
+            if let Err(e) = log_repo.record_request(&record).await {
+                warn!(
+                    proxy_id = record.proxy_id,
+                    proxy_address = %record.proxy_address,
+                    error = %e,
+                    "Failed to record proxy request"
+                );
+            }
+
+            if record.proxy_id != 0 {
+                let proxy_repo = ProxyRepository::new(pool);
+                if let Err(e) = proxy_repo
+                    .record_request(
+                        record.proxy_id,
+                        record.success,
+                        record.response_time,
+                        record.error_message.as_deref(),
+                    )
+                    .await
+                {
+                    warn!(
+                        proxy_id = record.proxy_id,
+                        proxy_address = %record.proxy_address,
+                        error = %e,
+                        "Failed to update proxy statistics"
+                    );
+                }
+            }
+        });
     }
 
     /// Create an error response

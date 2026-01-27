@@ -316,8 +316,8 @@ impl ProxyRepository {
                 SET requests = requests + 1,
                     successful_requests = successful_requests + 1,
                     avg_response_time = CASE
-                        WHEN requests = 0 THEN $2
-                        ELSE ((avg_response_time * requests) + $2) / (requests + 1)
+                        WHEN successful_requests = 0 THEN $2
+                        ELSE ((avg_response_time * successful_requests) + $2) / (successful_requests + 1)
                     END,
                     status = 'active',
                     last_error = NULL
@@ -336,7 +336,7 @@ impl ProxyRepository {
                     failed_requests = failed_requests + 1,
                     last_error = $2,
                     status = CASE
-                        WHEN failed_requests >= 2 THEN 'failed'
+                        WHEN (failed_requests + 1) >= 2 THEN 'failed'
                         ELSE status
                     END
                 WHERE id = $1
