@@ -72,3 +72,97 @@ impl ProxySelector for DynamicProxySelector {
         self.inner.read().release(proxy_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::proxy::rotation::RoundRobinSelector;
+
+    fn create_test_proxy(id: i32, address: &str) -> Proxy {
+        Proxy {
+            id,
+            address: address.to_string(),
+            protocol: "http".to_string(),
+            username: None,
+            password: None,
+            status: "idle".to_string(),
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            avg_response_time: 0,
+            last_check: None,
+            last_error: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_selector_refresh_propagates() {
+        let inner: Arc<dyn ProxySelector> = Arc::new(RoundRobinSelector::new());
+        let selector = DynamicProxySelector::new(inner);
+
+        selector
+            .refresh(vec![
+                create_test_proxy(1, "127.0.0.1:8081"),
+                create_test_proxy(2, "127.0.0.1:8082"),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(selector.available_count(), 2);
+        assert_eq!(selector.strategy_name(), "round_robin");
+        assert_eq!(selector.select().await.unwrap().id, 1);
+
+        selector
+            .refresh(vec![create_test_proxy(99, "127.0.0.1:8099")])
+            .await
+            .unwrap();
+
+        assert_eq!(selector.available_count(), 1);
+        assert_eq!(selector.select().await.unwrap().id, 99);
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_selector_switch_strategy_preserves_proxies_and_tracking() {
+        let inner: Arc<dyn ProxySelector> = Arc::new(RoundRobinSelector::new());
+        let selector = DynamicProxySelector::new(inner);
+
+        selector
+            .refresh(vec![
+                create_test_proxy(1, "127.0.0.1:8081"),
+                create_test_proxy(2, "127.0.0.1:8082"),
+                create_test_proxy(3, "127.0.0.1:8083"),
+            ])
+            .await
+            .unwrap();
+
+        // Prove the initial strategy is in effect.
+        assert_eq!(selector.strategy_name(), "round_robin");
+        assert_eq!(selector.select().await.unwrap().id, 1);
+        assert_eq!(selector.select().await.unwrap().id, 2);
+
+        // Swap to least-connections and ensure the proxy list is carried over.
+        selector
+            .set_strategy(RotationStrategy::LeastConnections, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        assert_eq!(selector.strategy_name(), "least_connections");
+        assert_eq!(selector.available_count(), 3);
+
+        // Acquire/release should be forwarded to the active strategy.
+        selector.acquire(1);
+        selector.acquire(1);
+        selector.acquire(2);
+
+        assert_eq!(selector.select().await.unwrap().id, 3);
+
+        selector.release(1);
+        selector.release(1);
+        selector.release(2);
+
+        assert_eq!(selector.select().await.unwrap().id, 1);
+    }
+}
