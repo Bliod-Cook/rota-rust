@@ -98,8 +98,12 @@ async fn main() -> error::Result<()> {
 
     // Start health checker
     let (health_handle, health_shutdown) = HealthCheckerHandle::new();
-    let health_checker =
-        HealthChecker::new(db.clone(), HealthCheckerConfig::default(), selector.clone());
+    let health_checker = HealthChecker::new(
+        db.clone(),
+        HealthCheckerConfig::default(),
+        selector.clone(),
+        config.proxy.egress_proxy.clone(),
+    );
     let health_settings = settings_tx.subscribe();
     let health_task = tokio::spawn(async move {
         health_checker.run(health_shutdown, health_settings).await;

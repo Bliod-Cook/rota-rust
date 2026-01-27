@@ -44,6 +44,7 @@ impl ProxyServer {
         log_sender: Option<broadcast::Sender<RequestRecord>>,
         rate_limiter: RateLimiter,
     ) -> Self {
+        let egress_proxy = config.egress_proxy.clone();
         let handler_config = ProxyHandlerConfig {
             max_retries: config.max_retries,
             connect_timeout: Duration::from_secs(config.connect_timeout),
@@ -56,6 +57,7 @@ impl ProxyServer {
             handler_config,
             log_sender,
             db_pool,
+            egress_proxy,
         ));
 
         let auth = if config.auth_enabled {

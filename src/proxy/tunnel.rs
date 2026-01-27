@@ -10,6 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, instrument};
 
+use crate::config::EgressProxyConfig;
 use crate::error::{Result, RotaError};
 use crate::models::Proxy;
 use crate::proxy::transport::ProxyTransport;
@@ -24,8 +25,9 @@ impl TunnelHandler {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send> {
-        ProxyTransport::connect(proxy, target_host, target_port).await
+        ProxyTransport::connect(proxy, target_host, target_port, egress_proxy).await
     }
 
     /// Establish a direct tunnel to the target (no upstream proxy)
@@ -90,9 +92,11 @@ impl TunnelHandler {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<(u64, u64)> {
         // Connect to target through proxy
-        let server = Self::tunnel_through_proxy(proxy, target_host, target_port).await?;
+        let server =
+            Self::tunnel_through_proxy(proxy, target_host, target_port, egress_proxy).await?;
 
         // Wrap Upgraded with TokioIo to get tokio AsyncRead/AsyncWrite traits
         let client = TokioIo::new(upgraded);

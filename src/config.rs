@@ -1,5 +1,6 @@
 use crate::error::{Result, RotaError};
 use std::env;
+use url::Url;
 
 /// Application configuration loaded from environment variables
 #[derive(Debug, Clone)]
@@ -42,6 +43,23 @@ pub struct ProxyServerConfig {
     pub rate_limit_burst: u32,
     /// Rotation strategy (random, round_robin, least_connections, time_based)
     pub rotation_strategy: String,
+    /// Optional forward/egress proxy for dialing upstream proxies
+    pub egress_proxy: Option<EgressProxyConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressProxyProtocol {
+    Http,
+    Socks5,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressProxyConfig {
+    pub protocol: EgressProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +141,7 @@ impl Config {
                     .parse()
                     .unwrap_or(200),
                 rotation_strategy: get_env_or("PROXY_ROTATION_STRATEGY", "random"),
+                egress_proxy: parse_egress_proxy()?,
             },
             api: ApiServerConfig {
                 port: get_env_or("API_PORT", "8001").parse().map_err(|_| {
@@ -189,6 +208,79 @@ impl Config {
     }
 }
 
+fn parse_egress_proxy() -> Result<Option<EgressProxyConfig>> {
+    let raw = env::var("ROTA_EGRESS_PROXY").unwrap_or_default();
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    let url = Url::parse(raw).map_err(|e| {
+        RotaError::InvalidConfig(format!("ROTA_EGRESS_PROXY must be a valid URL: {}", e))
+    })?;
+
+    // Reject URLs that carry request-specific components.
+    if url.fragment().is_some() || url.query().is_some() {
+        return Err(RotaError::InvalidConfig(
+            "ROTA_EGRESS_PROXY must not include query/fragment".into(),
+        ));
+    }
+    if !(url.path().is_empty() || url.path() == "/") {
+        return Err(RotaError::InvalidConfig(
+            "ROTA_EGRESS_PROXY must not include a path".into(),
+        ));
+    }
+
+    let protocol = match url.scheme().to_lowercase().as_str() {
+        "http" | "https" => EgressProxyProtocol::Http,
+        "socks5" | "socks5h" => EgressProxyProtocol::Socks5,
+        other => {
+            return Err(RotaError::InvalidConfig(format!(
+                "ROTA_EGRESS_PROXY has unsupported scheme: {}",
+                other
+            )))
+        }
+    };
+
+    let host = url.host_str().ok_or_else(|| {
+        RotaError::InvalidConfig("ROTA_EGRESS_PROXY must include a host".into())
+    })?;
+
+    let port = match url.port() {
+        Some(p) => p,
+        None => match protocol {
+            EgressProxyProtocol::Http => 80,
+            EgressProxyProtocol::Socks5 => 1080,
+        },
+    };
+
+    let username = if url.username().is_empty() {
+        None
+    } else {
+        Some(url.username().to_string())
+    };
+
+    let password = match (protocol, &username, url.password()) {
+        (_, None, _) => None,
+        (EgressProxyProtocol::Http, Some(_), None) => Some(String::new()),
+        (EgressProxyProtocol::Http, Some(_), Some(p)) => Some(p.to_string()),
+        (EgressProxyProtocol::Socks5, Some(_), Some(p)) if !p.is_empty() => Some(p.to_string()),
+        (EgressProxyProtocol::Socks5, Some(_), _) => {
+            return Err(RotaError::InvalidConfig(
+                "ROTA_EGRESS_PROXY socks5 auth requires a non-empty password".into(),
+            ))
+        }
+    };
+
+    Ok(Some(EgressProxyConfig {
+        protocol,
+        host: host.to_string(),
+        port,
+        username,
+        password,
+    }))
+}
+
 /// Get environment variable with a default value
 fn get_env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
@@ -215,6 +307,7 @@ mod tests {
         "PROXY_RATE_LIMIT_PER_SECOND",
         "PROXY_RATE_LIMIT_BURST",
         "PROXY_ROTATION_STRATEGY",
+        "ROTA_EGRESS_PROXY",
         "API_PORT",
         "API_HOST",
         "CORS_ORIGINS",
@@ -273,6 +366,7 @@ mod tests {
         assert_eq!(config.proxy.port, 8000);
         assert_eq!(config.proxy.host, "0.0.0.0");
         assert_eq!(config.proxy.rotation_strategy, "random");
+        assert!(config.proxy.egress_proxy.is_none());
 
         assert_eq!(config.api.port, 8001);
         assert_eq!(config.api.host, "0.0.0.0");
@@ -290,6 +384,7 @@ mod tests {
         env::set_var("PROXY_PORT", "9000");
         env::set_var("PROXY_HOST", "127.0.0.1");
         env::set_var("PROXY_ROTATION_STRATEGY", "round_robin");
+        env::set_var("ROTA_EGRESS_PROXY", "http://user:pass@egress.example:3128");
         env::set_var("API_PORT", "9001");
         env::set_var("CORS_ORIGINS", "https://a.example, https://b.example");
         env::set_var("DB_HOST", "db.example");
@@ -299,6 +394,16 @@ mod tests {
         assert_eq!(config.proxy.port, 9000);
         assert_eq!(config.proxy.host, "127.0.0.1");
         assert_eq!(config.proxy.rotation_strategy, "round_robin");
+        assert_eq!(
+            config.proxy.egress_proxy,
+            Some(EgressProxyConfig {
+                protocol: EgressProxyProtocol::Http,
+                host: "egress.example".to_string(),
+                port: 3128,
+                username: Some("user".to_string()),
+                password: Some("pass".to_string()),
+            })
+        );
         assert_eq!(config.api.port, 9001);
         assert_eq!(
             config.api.cors_origins,
@@ -321,6 +426,26 @@ mod tests {
     }
 
     #[test]
+    fn test_config_from_env_invalid_egress_proxy_url() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "not a url");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_config_from_env_socks5_egress_proxy_requires_password_if_user_set() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "socks5://user@egress.example:1080");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
     fn test_config_formatters() {
         let config = Config {
             proxy: ProxyServerConfig {
@@ -336,6 +461,7 @@ mod tests {
                 rate_limit_per_second: 100,
                 rate_limit_burst: 200,
                 rotation_strategy: "random".to_string(),
+                egress_proxy: None,
             },
             api: ApiServerConfig {
                 port: 8001,

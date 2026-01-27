@@ -15,8 +15,10 @@ use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, instrument, warn};
 
+use crate::config::EgressProxyConfig;
 use crate::error::{Result, RotaError};
 use crate::models::{Proxy, RequestRecord};
+use crate::proxy::egress;
 use crate::proxy::rotation::ProxySelector;
 use crate::proxy::transport::ProxyTransport;
 use crate::proxy::tunnel::{TunnelGuard, TunnelHandler};
@@ -52,6 +54,7 @@ pub struct ProxyHandler {
     config: ProxyHandlerConfig,
     log_sender: Option<broadcast::Sender<RequestRecord>>,
     db_pool: PgPool,
+    egress_proxy: Option<EgressProxyConfig>,
 }
 
 impl ProxyHandler {
@@ -60,12 +63,14 @@ impl ProxyHandler {
         config: ProxyHandlerConfig,
         log_sender: Option<broadcast::Sender<RequestRecord>>,
         db_pool: PgPool,
+        egress_proxy: Option<EgressProxyConfig>,
     ) -> Self {
         Self {
             selector,
             config,
             log_sender,
             db_pool,
+            egress_proxy,
         }
     }
 
@@ -138,7 +143,12 @@ impl ProxyHandler {
             let attempt_start = Instant::now();
             match tokio::time::timeout(
                 self.config.connect_timeout,
-                ProxyTransport::connect(&proxy, &target_host, target_port),
+                ProxyTransport::connect(
+                    &proxy,
+                    &target_host,
+                    target_port,
+                    self.egress_proxy.as_ref(),
+                ),
             )
             .await
             {
@@ -422,11 +432,11 @@ impl ProxyHandler {
         // Connect to proxy (address format is "host:port")
         let stream = tokio::time::timeout(
             self.config.connect_timeout,
-            tokio::net::TcpStream::connect(&proxy.address),
+            egress::connect_to_addr(self.egress_proxy.as_ref(), &proxy.address),
         )
         .await
         .map_err(|_| RotaError::Timeout)?
-        .map_err(|e| RotaError::ProxyConnectionFailed(format!("Connect failed: {}", e)))?;
+        ?;
 
         // Build request
         let mut builder = Request::builder()

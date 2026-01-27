@@ -6,11 +6,13 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hyper::Uri;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio_socks::tcp::Socks5Stream;
+use tokio_socks::tcp::{Socks4Stream, Socks5Stream};
 use tracing::{debug, instrument};
 
+use crate::config::EgressProxyConfig;
 use crate::error::{Result, RotaError};
 use crate::models::Proxy;
+use crate::proxy::egress;
 
 /// Proxy transport handler
 ///
@@ -24,13 +26,18 @@ impl ProxyTransport {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<Box<dyn ProxyConnection>> {
         let protocol = proxy.protocol.to_lowercase();
         match protocol.as_str() {
-            "http" | "https" => Self::connect_http(proxy, target_host, target_port).await,
-            "socks4" => Self::connect_socks4(proxy, target_host, target_port).await,
-            "socks4a" => Self::connect_socks4a(proxy, target_host, target_port).await,
-            "socks5" => Self::connect_socks5(proxy, target_host, target_port).await,
+            "http" | "https" => {
+                Self::connect_http(proxy, target_host, target_port, egress_proxy).await
+            }
+            "socks4" => Self::connect_socks4(proxy, target_host, target_port, egress_proxy).await,
+            "socks4a" => {
+                Self::connect_socks4a(proxy, target_host, target_port, egress_proxy).await
+            }
+            "socks5" => Self::connect_socks5(proxy, target_host, target_port, egress_proxy).await,
             _ => Err(RotaError::UnsupportedProtocol(protocol)),
         }
     }
@@ -40,12 +47,11 @@ impl ProxyTransport {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<Box<dyn ProxyConnection>> {
         debug!("Connecting to HTTP proxy at {}", proxy.address);
 
-        let stream = TcpStream::connect(&proxy.address)
-            .await
-            .map_err(|e| RotaError::ProxyConnectionFailed(format!("TCP connect failed: {}", e)))?;
+        let stream = egress::connect_to_addr(egress_proxy, &proxy.address).await?;
 
         // Send CONNECT request
         let connect_request = Self::build_connect_request(proxy, target_host, target_port);
@@ -101,6 +107,7 @@ impl ProxyTransport {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<Box<dyn ProxyConnection>> {
         debug!("Connecting to SOCKS4 proxy at {}", proxy.address);
 
@@ -114,21 +121,17 @@ impl ProxyTransport {
 
         let target_addr = std::net::SocketAddrV4::new(target_ip, target_port);
 
-        // Parse proxy address
-        let proxy_sock_addr: std::net::SocketAddr = proxy.address.parse().map_err(|_| {
-            RotaError::InvalidProxyAddress(format!("Invalid proxy address: {}", proxy.address))
-        })?;
+        let socket = egress::connect_to_addr(egress_proxy, &proxy.address).await?;
 
-        let stream = if let (Some(username), Some(password)) = (&proxy.username, &proxy.password) {
-            Socks5Stream::connect_with_password(proxy_sock_addr, target_addr, username, password)
-                .await
+        let stream = if let Some(user_id) = proxy.username.as_deref() {
+            Socks4Stream::connect_with_userid_and_socket(socket, target_addr, user_id).await
         } else {
-            Socks5Stream::connect(proxy_sock_addr, target_addr).await
+            Socks4Stream::connect_with_socket(socket, target_addr).await
         }
         .map_err(|e| RotaError::ProxyConnectionFailed(format!("SOCKS4 connect failed: {}", e)))?;
 
         debug!("SOCKS4 connection established");
-        Ok(Box::new(Socks5Connection(stream.into_inner())))
+        Ok(Box::new(TcpConnection(stream.into_inner())))
     }
 
     /// Connect through SOCKS4a proxy (supports hostname)
@@ -136,34 +139,24 @@ impl ProxyTransport {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<Box<dyn ProxyConnection>> {
         debug!("Connecting to SOCKS4a proxy at {}", proxy.address);
 
-        // Parse proxy address
-        let proxy_sock_addr: std::net::SocketAddr = proxy.address.parse().map_err(|_| {
-            RotaError::InvalidProxyAddress(format!("Invalid proxy address: {}", proxy.address))
-        })?;
+        let socket = egress::connect_to_addr(egress_proxy, &proxy.address).await?;
 
-        let target = format!("{}:{}", target_host, target_port);
-        let target_sock_addr: std::net::SocketAddr = target.parse().map_err(|_| {
-            RotaError::InvalidRequest(format!("Invalid target address: {}", target))
-        })?;
+        let target_host = normalize_socks_host(target_host);
 
-        let stream = if let (Some(username), Some(password)) = (&proxy.username, &proxy.password) {
-            Socks5Stream::connect_with_password(
-                proxy_sock_addr,
-                target_sock_addr,
-                username,
-                password,
-            )
-            .await
+        let stream = if let Some(user_id) = proxy.username.as_deref() {
+            Socks4Stream::connect_with_userid_and_socket(socket, (target_host, target_port), user_id)
+                .await
         } else {
-            Socks5Stream::connect(proxy_sock_addr, target_sock_addr).await
+            Socks4Stream::connect_with_socket(socket, (target_host, target_port)).await
         }
         .map_err(|e| RotaError::ProxyConnectionFailed(format!("SOCKS4a connect failed: {}", e)))?;
 
         debug!("SOCKS4a connection established");
-        Ok(Box::new(Socks5Connection(stream.into_inner())))
+        Ok(Box::new(TcpConnection(stream.into_inner())))
     }
 
     /// Connect through SOCKS5 proxy
@@ -171,34 +164,29 @@ impl ProxyTransport {
         proxy: &Proxy,
         target_host: &str,
         target_port: u16,
+        egress_proxy: Option<&EgressProxyConfig>,
     ) -> Result<Box<dyn ProxyConnection>> {
         debug!("Connecting to SOCKS5 proxy at {}", proxy.address);
 
-        // Parse proxy address
-        let proxy_sock_addr: std::net::SocketAddr = proxy.address.parse().map_err(|_| {
-            RotaError::InvalidProxyAddress(format!("Invalid proxy address: {}", proxy.address))
-        })?;
+        let socket = egress::connect_to_addr(egress_proxy, &proxy.address).await?;
 
-        let target = format!("{}:{}", target_host, target_port);
-        let target_sock_addr: std::net::SocketAddr = target.parse().map_err(|_| {
-            RotaError::InvalidRequest(format!("Invalid target address: {}", target))
-        })?;
+        let target_host = normalize_socks_host(target_host);
 
         let stream = if let (Some(username), Some(password)) = (&proxy.username, &proxy.password) {
-            Socks5Stream::connect_with_password(
-                proxy_sock_addr,
-                target_sock_addr,
+            Socks5Stream::connect_with_password_and_socket(
+                socket,
+                (target_host, target_port),
                 username,
                 password,
             )
             .await
         } else {
-            Socks5Stream::connect(proxy_sock_addr, target_sock_addr).await
+            Socks5Stream::connect_with_socket(socket, (target_host, target_port)).await
         }
         .map_err(|e| RotaError::ProxyConnectionFailed(format!("SOCKS5 connect failed: {}", e)))?;
 
         debug!("SOCKS5 connection established");
-        Ok(Box::new(Socks5Connection(stream.into_inner())))
+        Ok(Box::new(TcpConnection(stream.into_inner())))
     }
 
     /// Parse host and port from a URI
@@ -278,44 +266,11 @@ impl AsyncWrite for TcpConnection {
 
 impl ProxyConnection for TcpConnection {}
 
-/// SOCKS5 connection wrapper
-struct Socks5Connection(TcpStream);
-
-impl AsyncRead for Socks5Connection {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-    }
+fn normalize_socks_host(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
 }
-
-impl AsyncWrite for Socks5Connection {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
-    }
-}
-
-impl ProxyConnection for Socks5Connection {}
 
 #[cfg(test)]
 mod tests {

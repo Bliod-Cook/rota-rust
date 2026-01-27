@@ -5,17 +5,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, instrument, warn};
 
 use futures::StreamExt;
 
+use crate::config::EgressProxyConfig;
 use crate::database::Database;
 use crate::error::Result;
 use crate::models::{Proxy, Settings};
 use crate::proxy::rotation::ProxySelector;
+use crate::proxy::egress;
 use crate::proxy::transport::ProxyTransport;
 use crate::repository::ProxyRepository;
 
@@ -45,6 +46,7 @@ pub struct HealthChecker {
     db: Database,
     config: HealthCheckerConfig,
     selector: Arc<dyn ProxySelector>,
+    egress_proxy: Option<EgressProxyConfig>,
 }
 
 impl HealthChecker {
@@ -53,11 +55,13 @@ impl HealthChecker {
         db: Database,
         config: HealthCheckerConfig,
         selector: Arc<dyn ProxySelector>,
+        egress_proxy: Option<EgressProxyConfig>,
     ) -> Self {
         Self {
             db,
             config,
             selector,
+            egress_proxy,
         }
     }
 
@@ -176,7 +180,12 @@ impl HealthChecker {
         // 1) connectivity to the proxy itself, and 2) the proxy's ability to reach the target.
         let connect_result = timeout(
             check_timeout,
-            ProxyTransport::connect(proxy, &target_host, target_port),
+            ProxyTransport::connect(
+                proxy,
+                &target_host,
+                target_port,
+                self.egress_proxy.as_ref(),
+            ),
         )
         .await;
 
@@ -207,7 +216,7 @@ impl HealthChecker {
         // Connect to proxy
         let stream = match timeout(
             self.config.check_timeout,
-            TcpStream::connect(&proxy.address),
+            egress::connect_to_addr(self.egress_proxy.as_ref(), &proxy.address),
         )
         .await
         {

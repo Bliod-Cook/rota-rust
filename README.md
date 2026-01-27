@@ -50,6 +50,7 @@ PROXY_AUTH_PASSWORD=
 PROXY_RATE_LIMIT_ENABLED=false
 PROXY_RATE_LIMIT_PER_SECOND=100
 PROXY_RATE_LIMIT_BURST=200
+ROTA_EGRESS_PROXY=  # Optional forward proxy for dialing upstream proxies (http://user:pass@host:port or socks5://user:pass@host:port)
 ```
 
 ### API Server Configuration
