@@ -246,4 +246,46 @@ mod tests {
 
         assert_eq!(limiter.client_count(), 3);
     }
+
+    #[test]
+    fn test_apply_settings_clears_client_state() {
+        let limiter = RateLimiter::disabled();
+
+        limiter.apply_settings(&RateLimitSettings {
+            enabled: true,
+            interval: 60,
+            max_requests: 2,
+        });
+
+        limiter.check("192.168.1.1").ok();
+        limiter.check("192.168.1.2").ok();
+        assert_eq!(limiter.client_count(), 2);
+
+        limiter.apply_settings(&RateLimitSettings {
+            enabled: true,
+            interval: 60,
+            max_requests: 100,
+        });
+
+        assert_eq!(limiter.client_count(), 0);
+        assert!(limiter.check("192.168.1.1").is_ok());
+    }
+
+    #[test]
+    fn test_apply_settings_uses_clamped_values() {
+        let limiter = RateLimiter::disabled();
+
+        limiter.apply_settings(&RateLimitSettings {
+            enabled: true,
+            interval: 0,
+            max_requests: 0,
+        });
+
+        // Clamped to 1 request per 1 second.
+        assert!(limiter.check("192.168.1.1").is_ok());
+        assert!(matches!(
+            limiter.check("192.168.1.1"),
+            Err(RotaError::RateLimitExceeded { .. })
+        ));
+    }
 }
