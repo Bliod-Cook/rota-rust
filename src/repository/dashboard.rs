@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::models::{ChartData, ChartDataPoint, ChartTimeRange, DashboardStats};
+use crate::database::timescale;
 use sqlx::PgPool;
 
 /// Repository for dashboard statistics
@@ -11,6 +12,17 @@ pub struct DashboardRepository {
 impl DashboardRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    fn bucket_seconds(interval: &str) -> i64 {
+        match interval {
+            "1 minute" => 60,
+            "5 minutes" => 5 * 60,
+            "1 hour" => 60 * 60,
+            "6 hours" => 6 * 60 * 60,
+            "1 day" => 24 * 60 * 60,
+            _ => 60 * 60,
+        }
     }
 
     /// Get dashboard statistics
@@ -91,25 +103,47 @@ impl DashboardRepository {
         let end = range.end_time();
         let interval = range.interval();
 
-        let query = format!(
-            r#"
-            SELECT
-                time_bucket(INTERVAL '{}', timestamp) AS bucket,
-                COUNT(*)::float AS value
-            FROM proxy_requests
-            WHERE timestamp >= $1 AND timestamp <= $2
-            GROUP BY bucket
-            ORDER BY bucket
-            "#,
-            interval
-        );
+        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> =
+            if timescale::is_timescaledb_available(&self.pool).await {
+                let query = format!(
+                    r#"
+                    SELECT
+                        time_bucket(INTERVAL '{}', timestamp) AS bucket,
+                        COUNT(*)::float AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    "#,
+                    interval
+                );
 
-        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> = sqlx::query_as(&query)
-            .bind(start)
-            .bind(end)
-            .fetch_all(&self.pool)
-            .await
-            .unwrap_or_default();
+                sqlx::query_as(&query)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&self.pool)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                let bucket_secs = Self::bucket_seconds(interval);
+                sqlx::query_as(
+                    r#"
+                    SELECT
+                        to_timestamp(floor(extract(epoch from timestamp) / $3) * $3) AS bucket,
+                        COUNT(*)::float AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY 1
+                    ORDER BY 1
+                    "#,
+                )
+                .bind(start)
+                .bind(end)
+                .bind(bucket_secs)
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default()
+            };
 
         let data: Vec<ChartDataPoint> = rows
             .into_iter()
@@ -128,29 +162,55 @@ impl DashboardRepository {
         let end = range.end_time();
         let interval = range.interval();
 
-        let query = format!(
-            r#"
-            SELECT
-                time_bucket(INTERVAL '{}', timestamp) AS bucket,
-                COALESCE(
-                    (SUM(CASE WHEN success THEN 1 ELSE 0 END)::float /
-                     NULLIF(COUNT(*), 0)::float) * 100,
-                    0
-                ) AS value
-            FROM proxy_requests
-            WHERE timestamp >= $1 AND timestamp <= $2
-            GROUP BY bucket
-            ORDER BY bucket
-            "#,
-            interval
-        );
+        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> =
+            if timescale::is_timescaledb_available(&self.pool).await {
+                let query = format!(
+                    r#"
+                    SELECT
+                        time_bucket(INTERVAL '{}', timestamp) AS bucket,
+                        COALESCE(
+                            (SUM(CASE WHEN success THEN 1 ELSE 0 END)::float /
+                             NULLIF(COUNT(*), 0)::float) * 100,
+                            0
+                        ) AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    "#,
+                    interval
+                );
 
-        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> = sqlx::query_as(&query)
-            .bind(start)
-            .bind(end)
-            .fetch_all(&self.pool)
-            .await
-            .unwrap_or_default();
+                sqlx::query_as(&query)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&self.pool)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                let bucket_secs = Self::bucket_seconds(interval);
+                sqlx::query_as(
+                    r#"
+                    SELECT
+                        to_timestamp(floor(extract(epoch from timestamp) / $3) * $3) AS bucket,
+                        COALESCE(
+                            (SUM(CASE WHEN success THEN 1 ELSE 0 END)::float /
+                             NULLIF(COUNT(*), 0)::float) * 100,
+                            0
+                        ) AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY 1
+                    ORDER BY 1
+                    "#,
+                )
+                .bind(start)
+                .bind(end)
+                .bind(bucket_secs)
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default()
+            };
 
         let data: Vec<ChartDataPoint> = rows
             .into_iter()
@@ -169,25 +229,47 @@ impl DashboardRepository {
         let end = range.end_time();
         let interval = range.interval();
 
-        let query = format!(
-            r#"
-            SELECT
-                time_bucket(INTERVAL '{}', timestamp) AS bucket,
-                COALESCE(AVG(response_time)::float, 0) AS value
-            FROM proxy_requests
-            WHERE timestamp >= $1 AND timestamp <= $2
-            GROUP BY bucket
-            ORDER BY bucket
-            "#,
-            interval
-        );
+        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> =
+            if timescale::is_timescaledb_available(&self.pool).await {
+                let query = format!(
+                    r#"
+                    SELECT
+                        time_bucket(INTERVAL '{}', timestamp) AS bucket,
+                        COALESCE(AVG(response_time)::float, 0) AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    "#,
+                    interval
+                );
 
-        let rows: Vec<(chrono::DateTime<chrono::Utc>, f64)> = sqlx::query_as(&query)
-            .bind(start)
-            .bind(end)
-            .fetch_all(&self.pool)
-            .await
-            .unwrap_or_default();
+                sqlx::query_as(&query)
+                    .bind(start)
+                    .bind(end)
+                    .fetch_all(&self.pool)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                let bucket_secs = Self::bucket_seconds(interval);
+                sqlx::query_as(
+                    r#"
+                    SELECT
+                        to_timestamp(floor(extract(epoch from timestamp) / $3) * $3) AS bucket,
+                        COALESCE(AVG(response_time)::float, 0) AS value
+                    FROM proxy_requests
+                    WHERE timestamp >= $1 AND timestamp <= $2
+                    GROUP BY 1
+                    ORDER BY 1
+                    "#,
+                )
+                .bind(start)
+                .bind(end)
+                .bind(bucket_secs)
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default()
+            };
 
         let data: Vec<ChartDataPoint> = rows
             .into_iter()
