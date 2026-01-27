@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::models::{CreateLogRequest, Log, LogListParams, PaginatedResponse, RequestRecord};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 
 /// Repository for log database operations
 #[derive(Clone)]
@@ -43,88 +43,66 @@ impl LogRepository {
         let limit = params.limit.unwrap_or(50).clamp(1, 100);
         let offset = (page - 1) * limit;
 
-        // Build WHERE clause
-        let mut conditions = vec!["1=1".to_string()];
-
+        // Count query
+        let mut count_query = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM logs WHERE 1=1");
         if let Some(ref level) = params.level {
             if !level.is_empty() {
-                conditions.push("level = $3".to_string());
+                count_query.push(" AND level = ").push_bind(level);
             }
         }
-
         if let Some(ref search) = params.search {
             if !search.is_empty() {
-                conditions.push("message ILIKE $4".to_string());
+                count_query
+                    .push(" AND message ILIKE ")
+                    .push_bind(format!("%{}%", search));
             }
         }
-
-        if params.start_time.is_some() {
-            conditions.push("timestamp >= $5".to_string());
+        if let Some(start_time) = params.start_time {
+            count_query.push(" AND timestamp >= ").push_bind(start_time);
+        }
+        if let Some(end_time) = params.end_time {
+            count_query.push(" AND timestamp <= ").push_bind(end_time);
         }
 
-        if params.end_time.is_some() {
-            conditions.push("timestamp <= $6".to_string());
-        }
-
-        let where_clause = conditions.join(" AND ");
-
-        // Count query
-        let count_query = format!("SELECT COUNT(*) FROM logs WHERE {}", where_clause);
+        let total: i64 = count_query.build_query_scalar().fetch_one(&self.pool).await?;
 
         // Data query
-        let data_query = format!(
+        let mut data_query = QueryBuilder::<Postgres>::new(
             r#"
             SELECT id, timestamp, level, message, details, metadata
             FROM logs
-            WHERE {}
-            ORDER BY timestamp DESC
-            LIMIT $1 OFFSET $2
+            WHERE 1=1
             "#,
-            where_clause
         );
-
-        // Build and execute count query
-        let mut count_builder = sqlx::query_scalar::<_, i64>(&count_query);
         if let Some(ref level) = params.level {
             if !level.is_empty() {
-                count_builder = count_builder.bind(level);
+                data_query.push(" AND level = ").push_bind(level);
             }
         }
         if let Some(ref search) = params.search {
             if !search.is_empty() {
-                count_builder = count_builder.bind(format!("%{}%", search));
+                data_query
+                    .push(" AND message ILIKE ")
+                    .push_bind(format!("%{}%", search));
             }
         }
         if let Some(start_time) = params.start_time {
-            count_builder = count_builder.bind(start_time);
+            data_query.push(" AND timestamp >= ").push_bind(start_time);
         }
         if let Some(end_time) = params.end_time {
-            count_builder = count_builder.bind(end_time);
+            data_query.push(" AND timestamp <= ").push_bind(end_time);
         }
 
-        let total = count_builder.fetch_one(&self.pool).await.unwrap_or(0);
+        data_query
+            .push(" ORDER BY timestamp DESC LIMIT ")
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
 
-        // Build and execute data query
-        let mut data_builder = sqlx::query_as::<_, Log>(&data_query);
-        data_builder = data_builder.bind(limit).bind(offset);
-        if let Some(ref level) = params.level {
-            if !level.is_empty() {
-                data_builder = data_builder.bind(level);
-            }
-        }
-        if let Some(ref search) = params.search {
-            if !search.is_empty() {
-                data_builder = data_builder.bind(format!("%{}%", search));
-            }
-        }
-        if let Some(start_time) = params.start_time {
-            data_builder = data_builder.bind(start_time);
-        }
-        if let Some(end_time) = params.end_time {
-            data_builder = data_builder.bind(end_time);
-        }
-
-        let logs = data_builder.fetch_all(&self.pool).await.unwrap_or_default();
+        let logs: Vec<Log> = data_query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(PaginatedResponse::new(logs, total, page, limit))
     }

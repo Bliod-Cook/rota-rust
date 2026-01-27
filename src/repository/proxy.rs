@@ -3,7 +3,7 @@ use crate::models::{
     CreateProxyRequest, PaginatedResponse, Proxy, ProxyListParams, ProxyWithStats,
     UpdateProxyRequest,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use tracing::info;
 
 /// Repository for proxy database operations
@@ -82,33 +82,6 @@ impl ProxyRepository {
         let limit = params.limit.unwrap_or(20).clamp(1, 100);
         let offset = (page - 1) * limit;
 
-        // Build WHERE clause
-        let mut conditions = vec!["1=1".to_string()];
-        let mut param_index = 1;
-
-        if let Some(ref status) = params.status {
-            if !status.is_empty() {
-                param_index += 1;
-                conditions.push(format!("status = ${}", param_index));
-            }
-        }
-
-        if let Some(ref protocol) = params.protocol {
-            if !protocol.is_empty() {
-                param_index += 1;
-                conditions.push(format!("protocol = ${}", param_index));
-            }
-        }
-
-        if let Some(ref search) = params.search {
-            if !search.is_empty() {
-                param_index += 1;
-                conditions.push(format!("address ILIKE ${}", param_index));
-            }
-        }
-
-        let where_clause = conditions.join(" AND ");
-
         // Build ORDER BY clause (sanitized)
         let sort_field = match params.sort_field.as_deref() {
             Some("address") => "address",
@@ -127,62 +100,71 @@ impl ProxyRepository {
         };
 
         // Count query
-        let count_query = format!("SELECT COUNT(*) FROM proxies WHERE {}", where_clause);
+        let mut count_query = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM proxies WHERE 1=1");
+        if let Some(ref status) = params.status {
+            if !status.is_empty() {
+                count_query.push(" AND status = ").push_bind(status);
+            }
+        }
+        if let Some(ref protocol) = params.protocol {
+            if !protocol.is_empty() {
+                count_query.push(" AND protocol = ").push_bind(protocol);
+            }
+        }
+        if let Some(ref search) = params.search {
+            if !search.is_empty() {
+                count_query
+                    .push(" AND address ILIKE ")
+                    .push_bind(format!("%{}%", search));
+            }
+        }
+
+        let total: i64 = count_query.build_query_scalar().fetch_one(&self.pool).await?;
 
         // Data query
-        let data_query = format!(
+        let mut data_query = QueryBuilder::<Postgres>::new(
             r#"
             SELECT id, address, protocol, username, password, status,
                    requests, successful_requests, failed_requests,
                    avg_response_time, last_check, last_error,
                    created_at, updated_at
             FROM proxies
-            WHERE {}
-            ORDER BY {} {}
-            LIMIT $1 OFFSET $2
+            WHERE 1=1
             "#,
-            where_clause, sort_field, sort_order
         );
 
-        // Execute count query
-        let mut count_query_builder = sqlx::query_scalar::<_, i64>(&count_query);
         if let Some(ref status) = params.status {
             if !status.is_empty() {
-                count_query_builder = count_query_builder.bind(status);
+                data_query.push(" AND status = ").push_bind(status);
             }
         }
         if let Some(ref protocol) = params.protocol {
             if !protocol.is_empty() {
-                count_query_builder = count_query_builder.bind(protocol);
+                data_query.push(" AND protocol = ").push_bind(protocol);
             }
         }
         if let Some(ref search) = params.search {
             if !search.is_empty() {
-                count_query_builder = count_query_builder.bind(format!("%{}%", search));
-            }
-        }
-        let total = count_query_builder.fetch_one(&self.pool).await?;
-
-        // Execute data query
-        let mut data_query_builder = sqlx::query_as::<_, Proxy>(&data_query);
-        data_query_builder = data_query_builder.bind(limit).bind(offset);
-        if let Some(ref status) = params.status {
-            if !status.is_empty() {
-                data_query_builder = data_query_builder.bind(status);
-            }
-        }
-        if let Some(ref protocol) = params.protocol {
-            if !protocol.is_empty() {
-                data_query_builder = data_query_builder.bind(protocol);
-            }
-        }
-        if let Some(ref search) = params.search {
-            if !search.is_empty() {
-                data_query_builder = data_query_builder.bind(format!("%{}%", search));
+                data_query
+                    .push(" AND address ILIKE ")
+                    .push_bind(format!("%{}%", search));
             }
         }
 
-        let proxies = data_query_builder.fetch_all(&self.pool).await?;
+        data_query
+            .push(" ORDER BY ")
+            .push(sort_field)
+            .push(" ")
+            .push(sort_order)
+            .push(" LIMIT ")
+            .push_bind(limit)
+            .push(" OFFSET ")
+            .push_bind(offset);
+
+        let proxies: Vec<Proxy> = data_query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await?;
 
         let data: Vec<ProxyWithStats> = proxies.into_iter().map(ProxyWithStats::from).collect();
 
