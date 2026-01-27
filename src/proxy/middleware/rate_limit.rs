@@ -6,6 +6,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
@@ -13,6 +14,7 @@ use governor::{Quota, RateLimiter as GovRateLimiter};
 use tracing::{debug, warn};
 
 use crate::error::{Result, RotaError};
+use crate::models::RateLimitSettings;
 
 #[derive(Debug)]
 struct ClientLimiter {
@@ -39,29 +41,33 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[derive(Clone, Copy)]
+struct RateLimiterConfig {
+    enabled: bool,
+    quota: Quota,
+    max_idle: Duration,
+}
+
 /// Rate limiter for proxy requests
 pub struct RateLimiter {
-    /// Whether rate limiting is enabled
-    enabled: bool,
+    config: Arc<ArcSwap<RateLimiterConfig>>,
     /// Rate limiters per client IP
     limiters: Arc<DashMap<String, ClientLimiter>>,
-    /// Requests per second limit
-    requests_per_second: NonZeroU32,
-    /// Burst size
-    burst_size: NonZeroU32,
-    /// How long to keep per-client state without activity
-    max_idle: Duration,
 }
 
 impl RateLimiter {
     /// Create a new rate limiter
     pub fn new(enabled: bool, requests_per_second: u32, burst_size: u32) -> Self {
+        let requests_per_second = NonZeroU32::new(requests_per_second.max(1)).unwrap();
+        let burst_size = NonZeroU32::new(burst_size.max(1)).unwrap();
+
         Self {
-            enabled,
+            config: Arc::new(ArcSwap::from_pointee(RateLimiterConfig {
+                enabled,
+                quota: Quota::per_second(requests_per_second).allow_burst(burst_size),
+                max_idle: Duration::from_secs(10 * 60),
+            })),
             limiters: Arc::new(DashMap::new()),
-            requests_per_second: NonZeroU32::new(requests_per_second.max(1)).unwrap(),
-            burst_size: NonZeroU32::new(burst_size.max(1)).unwrap(),
-            max_idle: Duration::from_secs(10 * 60),
         }
     }
 
@@ -72,12 +78,40 @@ impl RateLimiter {
 
     /// Check if rate limiting is enabled
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.config.load().enabled
+    }
+
+    pub fn apply_settings(&self, settings: &RateLimitSettings) {
+        let enabled = settings.enabled;
+
+        let interval_secs = settings.interval.max(1) as u64;
+        let max_requests = settings.max_requests.max(1) as u32;
+        let max_burst = NonZeroU32::new(max_requests).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+
+        let mut replenish_1_per = Duration::from_secs(interval_secs) / max_burst.get();
+        if replenish_1_per.is_zero() {
+            replenish_1_per = Duration::from_nanos(1);
+        }
+
+        // Quota: allow `max_requests` over `interval` seconds, with burst == max_requests.
+        let quota = Quota::with_period(replenish_1_per)
+            .unwrap_or_else(|| Quota::per_second(NonZeroU32::new(1).unwrap()))
+            .allow_burst(max_burst);
+
+        let max_idle = self.config.load().max_idle;
+
+        // Clear per-client state so new quota applies immediately.
+        self.limiters.clear();
+        self.config.store(Arc::new(RateLimiterConfig {
+            enabled,
+            quota,
+            max_idle,
+        }));
     }
 
     /// Check if a request from the given client IP is allowed
     pub fn check(&self, client_ip: &str) -> Result<()> {
-        if !self.enabled {
+        if !self.config.load().enabled {
             return Ok(());
         }
 
@@ -103,8 +137,9 @@ impl RateLimiter {
         client_ip: &str,
     ) -> Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
         let now_ms = now_ms();
+        let quota = self.config.load().quota;
+
         let entry = self.limiters.entry(client_ip.to_string()).or_insert_with(|| {
-            let quota = Quota::per_second(self.requests_per_second).allow_burst(self.burst_size);
             ClientLimiter::new(Arc::new(GovRateLimiter::direct(quota)), now_ms)
         });
 
@@ -118,7 +153,7 @@ impl RateLimiter {
     /// Clean up old rate limiters (call periodically)
     pub fn cleanup(&self) {
         let now_ms = now_ms();
-        let max_idle_ms = self.max_idle.as_millis() as u64;
+        let max_idle_ms = self.config.load().max_idle.as_millis() as u64;
 
         self.limiters.retain(|_, entry| {
             let last_seen = entry
@@ -137,11 +172,8 @@ impl RateLimiter {
 impl Clone for RateLimiter {
     fn clone(&self) -> Self {
         Self {
-            enabled: self.enabled,
+            config: Arc::clone(&self.config),
             limiters: Arc::clone(&self.limiters),
-            requests_per_second: self.requests_per_second,
-            burst_size: self.burst_size,
-            max_idle: self.max_idle,
         }
     }
 }

@@ -42,6 +42,7 @@ impl ProxyServer {
         selector: Arc<dyn ProxySelector>,
         db_pool: PgPool,
         log_sender: Option<broadcast::Sender<RequestRecord>>,
+        rate_limiter: RateLimiter,
     ) -> Self {
         let handler_config = ProxyHandlerConfig {
             max_retries: config.max_retries,
@@ -65,12 +66,6 @@ impl ProxyServer {
             )
         } else {
             ProxyAuth::disabled()
-        };
-
-        let rate_limiter = if config.rate_limit_enabled {
-            RateLimiter::new(true, config.rate_limit_per_second, config.rate_limit_burst)
-        } else {
-            RateLimiter::disabled()
         };
 
         Self {
@@ -194,6 +189,7 @@ pub struct ProxyServerBuilder {
     selector: Option<Arc<dyn ProxySelector>>,
     db_pool: Option<PgPool>,
     log_sender: Option<broadcast::Sender<RequestRecord>>,
+    rate_limiter: Option<RateLimiter>,
 }
 
 impl ProxyServerBuilder {
@@ -203,6 +199,7 @@ impl ProxyServerBuilder {
             selector: None,
             db_pool: None,
             log_sender: None,
+            rate_limiter: None,
         }
     }
 
@@ -221,9 +218,15 @@ impl ProxyServerBuilder {
         self
     }
 
+    pub fn rate_limiter(mut self, rate_limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(rate_limiter);
+        self
+    }
+
     pub fn build(self) -> ProxyServer {
         let selector = self.selector.expect("Proxy selector is required");
         let db_pool = self.db_pool.expect("Database pool is required");
-        ProxyServer::new(self.config, selector, db_pool, self.log_sender)
+        let rate_limiter = self.rate_limiter.unwrap_or_else(RateLimiter::disabled);
+        ProxyServer::new(self.config, selector, db_pool, self.log_sender, rate_limiter)
     }
 }

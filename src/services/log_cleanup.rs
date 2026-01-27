@@ -13,7 +13,8 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::database::Database;
 use crate::error::Result;
-use crate::repository::{LogRepository, SettingsRepository};
+use crate::models::Settings;
+use crate::repository::LogRepository;
 
 /// Log cleanup service configuration
 #[derive(Clone)]
@@ -55,33 +56,55 @@ impl LogCleanupService {
     }
 
     /// Run the log cleanup service
-    #[instrument(skip(self, shutdown))]
-    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
+    #[instrument(skip(self, shutdown, settings_rx))]
+    pub async fn run(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+        mut settings_rx: watch::Receiver<Settings>,
+    ) {
         info!(
             "Starting log cleanup service (default retention: {} days)",
             self.config.default_retention_days
         );
 
-        // Initial cleanup on startup
-        if let Err(e) = self.cleanup().await {
+        let settings = settings_rx.borrow().clone();
+        self.refresh_interval(&settings);
+
+        // Initial cleanup on startup (only if enabled)
+        if let Err(e) = self.cleanup(&settings).await {
             error!("Initial log cleanup failed: {}", e);
         }
 
-        loop {
-            // Get current interval (may be updated from settings)
-            let interval_secs = self.current_interval_secs.load(Ordering::Relaxed);
-            let mut cleanup_interval = interval(Duration::from_secs(interval_secs));
-            cleanup_interval.tick().await; // Skip immediate tick
+        let mut cleanup_interval = interval(Duration::from_secs(
+            self.current_interval_secs.load(Ordering::Relaxed),
+        ));
+        cleanup_interval.tick().await; // Skip immediate tick
 
+        loop {
             tokio::select! {
                 _ = cleanup_interval.tick() => {
-                    // Check if interval has changed (FIXED: proper comparison)
-                    if let Err(e) = self.refresh_interval().await {
-                        warn!("Failed to refresh cleanup interval: {}", e);
+                    let settings = settings_rx.borrow().clone();
+                    self.refresh_interval(&settings);
+
+                    if let Err(e) = self.cleanup(&settings).await {
+                        error!("Log cleanup failed: {}", e);
+                    }
+                }
+                res = settings_rx.changed() => {
+                    if res.is_err() {
+                        break;
                     }
 
-                    if let Err(e) = self.cleanup().await {
-                        error!("Log cleanup failed: {}", e);
+                    let settings = settings_rx.borrow().clone();
+                    self.refresh_interval(&settings);
+                    cleanup_interval = interval(Duration::from_secs(
+                        self.current_interval_secs.load(Ordering::Relaxed),
+                    ));
+                    cleanup_interval.tick().await; // Skip immediate tick after reset
+
+                    // Apply changes immediately.
+                    if let Err(e) = self.cleanup(&settings).await {
+                        warn!("Log cleanup after settings update failed: {}", e);
                     }
                 }
                 _ = shutdown.changed() => {
@@ -95,16 +118,11 @@ impl LogCleanupService {
     }
 
     /// Refresh the cleanup interval from settings
-    async fn refresh_interval(&self) -> Result<()> {
-        let settings_repo = SettingsRepository::new(self.db.pool().clone());
-        let settings = settings_repo.get_all().await?;
-
-        // Convert retention interval to check interval
-        // Check more frequently for shorter retention periods
-        let new_interval_secs = match settings.log_retention.retention_days {
-            0..=1 => 300,  // 5 minutes for 0-1 day retention
-            2..=7 => 3600, // 1 hour for 2-7 days
-            _ => 86400,    // 1 day for longer retention
+    fn refresh_interval(&self, settings: &Settings) {
+        let new_interval_secs = if settings.log_retention.cleanup_interval_hours > 0 {
+            (settings.log_retention.cleanup_interval_hours as u64) * 3600
+        } else {
+            self.config.check_interval_secs
         };
 
         let current = self.current_interval_secs.load(Ordering::Relaxed);
@@ -118,18 +136,18 @@ impl LogCleanupService {
             self.current_interval_secs
                 .store(new_interval_secs, Ordering::Relaxed);
         }
-
-        Ok(())
     }
 
     /// Perform log cleanup
     #[instrument(skip(self))]
-    async fn cleanup(&self) -> Result<()> {
-        let settings_repo = SettingsRepository::new(self.db.pool().clone());
+    async fn cleanup(&self, settings: &Settings) -> Result<()> {
+        if !settings.log_retention.enabled {
+            return Ok(());
+        }
+
         let log_repo = LogRepository::new(self.db.pool().clone());
 
         // Get retention period from settings
-        let settings = settings_repo.get_all().await?;
         let retention_days: i32 = if settings.log_retention.retention_days > 0 {
             settings.log_retention.retention_days
         } else {

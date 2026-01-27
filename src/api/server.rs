@@ -14,8 +14,9 @@ use tracing::{info, instrument};
 use crate::config::{ApiServerConfig, Config};
 use crate::database::Database;
 use crate::error::Result;
-use crate::models::RequestRecord;
-use crate::proxy::rotation::ProxySelector;
+use crate::models::{RequestRecord, Settings};
+use crate::proxy::middleware::RateLimiter;
+use crate::proxy::rotation::DynamicProxySelector;
 
 use super::middleware::{cors_layer, JwtAuth};
 use super::routes;
@@ -27,8 +28,10 @@ pub struct AppState {
     pub config: Config,
     pub jwt_auth: JwtAuth,
     pub started_at: Instant,
-    pub selector: Arc<dyn ProxySelector>,
+    pub selector: Arc<DynamicProxySelector>,
     pub log_sender: broadcast::Sender<RequestRecord>,
+    pub settings_tx: watch::Sender<Settings>,
+    pub rate_limiter: RateLimiter,
 }
 
 /// API server
@@ -43,8 +46,10 @@ impl ApiServer {
         api_config: ApiServerConfig,
         full_config: Config,
         db: Database,
-        selector: Arc<dyn ProxySelector>,
+        selector: Arc<DynamicProxySelector>,
         log_sender: broadcast::Sender<RequestRecord>,
+        settings_tx: watch::Sender<Settings>,
+        rate_limiter: RateLimiter,
     ) -> Self {
         let jwt_auth = JwtAuth::new(&api_config.jwt_secret);
 
@@ -55,6 +60,8 @@ impl ApiServer {
             started_at: Instant::now(),
             selector,
             log_sender,
+            settings_tx,
+            rate_limiter,
         };
 
         Self {
@@ -102,7 +109,7 @@ pub struct ApiServerBuilder {
     api_config: ApiServerConfig,
     full_config: Option<Config>,
     db: Option<Database>,
-    selector: Option<Arc<dyn ProxySelector>>,
+    selector: Option<Arc<DynamicProxySelector>>,
     log_sender: Option<broadcast::Sender<RequestRecord>>,
 }
 
@@ -127,7 +134,7 @@ impl ApiServerBuilder {
         self
     }
 
-    pub fn selector(mut self, selector: Arc<dyn ProxySelector>) -> Self {
+    pub fn selector(mut self, selector: Arc<DynamicProxySelector>) -> Self {
         self.selector = Some(selector);
         self
     }
@@ -143,6 +150,14 @@ impl ApiServerBuilder {
         let selector = self.selector.expect("Proxy selector is required");
         let log_sender = self.log_sender.expect("Log sender is required");
 
-        ApiServer::new(self.api_config, full_config, db, selector, log_sender)
+        ApiServer::new(
+            self.api_config,
+            full_config,
+            db,
+            selector,
+            log_sender,
+            watch::channel(Settings::default()).0,
+            RateLimiter::disabled(),
+        )
     }
 }

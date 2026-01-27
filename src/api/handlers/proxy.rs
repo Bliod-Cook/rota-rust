@@ -10,6 +10,7 @@ use tracing::info;
 use crate::api::server::AppState;
 use crate::error::RotaError;
 use crate::models::{CreateProxyRequest, ProxyListParams, UpdateProxyRequest};
+use crate::proxy::rotation::ProxySelector;
 use crate::repository::ProxyRepository;
 
 /// Query parameters for listing proxies

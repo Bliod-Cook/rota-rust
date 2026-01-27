@@ -3,10 +3,12 @@
 //! This module provides various strategies for selecting proxies from the pool.
 
 mod least_conn;
+mod dynamic;
 mod random;
 mod round_robin;
 mod time_based;
 
+pub use dynamic::DynamicProxySelector;
 pub use least_conn::LeastConnectionsSelector;
 pub use random::RandomSelector;
 pub use round_robin::RoundRobinSelector;

@@ -12,8 +12,9 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::database::Database;
 use crate::error::Result;
-use crate::models::Proxy;
+use crate::models::{Proxy, Settings};
 use crate::proxy::rotation::ProxySelector;
+use crate::proxy::transport::ProxyTransport;
 use crate::repository::ProxyRepository;
 
 /// Health checker configuration
@@ -59,8 +60,12 @@ impl HealthChecker {
     }
 
     /// Run the health checker (call in a spawned task)
-    #[instrument(skip(self, shutdown))]
-    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
+    #[instrument(skip(self, shutdown, settings_rx))]
+    pub async fn run(
+        &self,
+        mut shutdown: watch::Receiver<bool>,
+        mut settings_rx: watch::Receiver<Settings>,
+    ) {
         info!(
             "Starting health checker with {}s interval",
             self.config.check_interval.as_secs()
@@ -71,9 +76,13 @@ impl HealthChecker {
         loop {
             tokio::select! {
                 _ = check_interval.tick() => {
-                    if let Err(e) = self.check_all_proxies().await {
+                    let settings = settings_rx.borrow().clone();
+                    if let Err(e) = self.check_all_proxies(&settings).await {
                         error!("Health check round failed: {}", e);
                     }
+                }
+                _ = settings_rx.changed() => {
+                    // Settings updates are applied on the next tick; we just keep the latest.
                 }
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
@@ -86,7 +95,7 @@ impl HealthChecker {
     }
 
     /// Check all proxies and update their health status
-    async fn check_all_proxies(&self) -> Result<()> {
+    async fn check_all_proxies(&self, settings: &Settings) -> Result<()> {
         let repo = ProxyRepository::new(self.db.pool().clone());
         // Include failed proxies so they can recover when they become reachable again.
         let proxies = repo.get_all().await?;
@@ -97,7 +106,7 @@ impl HealthChecker {
         let mut unhealthy_count = 0;
 
         for proxy in &proxies {
-            let (is_healthy, error_msg) = self.check_proxy(proxy).await;
+            let (is_healthy, error_msg) = self.check_proxy(proxy, settings).await;
 
             if is_healthy {
                 healthy_count += 1;
@@ -116,8 +125,12 @@ impl HealthChecker {
 
         // Refresh the selector with updated proxy list
         // Re-fetch proxies to get updated status
-        let healthy_proxies = repo.get_all_usable().await?;
-        if let Err(e) = self.selector.refresh(healthy_proxies).await {
+        let refreshed_proxies = if settings.rotation.remove_unhealthy {
+            repo.get_all_usable().await?
+        } else {
+            repo.get_all().await?
+        };
+        if let Err(e) = self.selector.refresh(refreshed_proxies).await {
             error!("Failed to refresh selector: {}", e);
         }
 
@@ -132,31 +145,48 @@ impl HealthChecker {
     /// Check a single proxy's health
     /// Returns (is_healthy, optional_error_message)
     #[instrument(skip(self), fields(proxy_id = proxy.id, proxy_address = %proxy.address))]
-    async fn check_proxy(&self, proxy: &Proxy) -> (bool, Option<String>) {
+    async fn check_proxy(&self, proxy: &Proxy, settings: &Settings) -> (bool, Option<String>) {
         debug!("Checking health of proxy at {}", proxy.address);
 
-        // First, check if we can connect to the proxy
+        let check_url = if settings.healthcheck.url.is_empty() {
+            self.config.check_url.as_str()
+        } else {
+            settings.healthcheck.url.as_str()
+        };
+
+        let (target_host, target_port) = match url::Url::parse(check_url)
+            .ok()
+            .and_then(|u| Some((u.host_str()?.to_string(), u.port_or_known_default()?)))
+        {
+            Some(v) => v,
+            None => ("www.google.com".to_string(), 80),
+        };
+
+        let check_timeout = Duration::from_secs(settings.healthcheck.timeout.max(1) as u64);
+
+        // Establish a proxied connection to a known host/port. This validates both:
+        // 1) connectivity to the proxy itself, and 2) the proxy's ability to reach the target.
         let connect_result = timeout(
-            self.config.check_timeout,
-            TcpStream::connect(&proxy.address),
+            check_timeout,
+            ProxyTransport::connect(proxy, &target_host, target_port),
         )
         .await;
 
         match connect_result {
-            Ok(Ok(_stream)) => {
+            Ok(Ok(_conn)) => {
                 debug!(
-                    "Proxy {} is healthy (TCP connect successful)",
-                    proxy.address
+                    "Proxy {} is healthy (CONNECT to {}:{} successful)",
+                    proxy.address, target_host, target_port
                 );
                 (true, None)
             }
             Ok(Err(e)) => {
-                let msg = format!("connection failed: {}", e);
+                let msg = format!("connect failed: {}", e);
                 warn!("Proxy {} is unhealthy: {}", proxy.address, msg);
                 (false, Some(msg))
             }
             Err(_) => {
-                let msg = "connection timed out".to_string();
+                let msg = "connect timed out".to_string();
                 warn!("Proxy {} is unhealthy: {}", proxy.address, msg);
                 (false, Some(msg))
             }

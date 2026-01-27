@@ -3,6 +3,7 @@
 //! Starts both the proxy server and API server with graceful shutdown support.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::signal;
 use tokio::sync::{broadcast, watch};
@@ -22,7 +23,8 @@ use api::ApiServer;
 use config::Config;
 use database::Database;
 use proxy::health::{HealthChecker, HealthCheckerConfig, HealthCheckerHandle};
-use proxy::rotation::{create_selector, RotationStrategy};
+use proxy::middleware::RateLimiter;
+use proxy::rotation::{create_selector, DynamicProxySelector, ProxySelector, RotationStrategy, TimeBasedSelector};
 use proxy::server::ProxyServer;
 use services::{LogCleanupConfig, LogCleanupHandle, LogCleanupService};
 
@@ -59,19 +61,37 @@ async fn main() -> error::Result<()> {
         );
     }
 
+    // Load runtime settings from DB and expose them via watch channel.
+    let settings_repo = repository::SettingsRepository::new(db.pool().clone());
+    let settings = settings_repo.get_all().await?;
+    let (settings_tx, _) = watch::channel(settings.clone());
+
     // Create log broadcast channel (bounded to prevent memory leaks)
     let (log_sender, _) = broadcast::channel::<models::RequestRecord>(1024);
 
-    // Create proxy selector
-    let strategy = RotationStrategy::from_str(&config.proxy.rotation_strategy);
-    let selector: Arc<dyn proxy::rotation::ProxySelector> = Arc::from(create_selector(strategy));
+    // Create proxy selector (strategy can be changed at runtime via settings)
+    let strategy = RotationStrategy::from_str(&settings.rotation.method);
+    let interval_secs = settings.rotation.time_based.interval.max(1) as u64;
+    let base_selector: Arc<dyn ProxySelector> = match strategy {
+        RotationStrategy::TimeBased => Arc::new(TimeBasedSelector::with_interval(Duration::from_secs(interval_secs))),
+        _ => Arc::from(create_selector(strategy)),
+    };
+    let selector = Arc::new(DynamicProxySelector::new(base_selector));
     info!("Using rotation strategy: {}", strategy.as_str());
 
     // Load initial proxies into selector
     let proxy_repo = repository::ProxyRepository::new(db.pool().clone());
-    let proxies = proxy_repo.get_all_usable().await?;
+    let proxies = if settings.rotation.remove_unhealthy {
+        proxy_repo.get_all_usable().await?
+    } else {
+        proxy_repo.get_all().await?
+    };
     selector.refresh(proxies).await?;
     info!("Loaded {} proxies", selector.available_count());
+
+    // Create shared rate limiter (can be reconfigured at runtime via settings)
+    let rate_limiter = RateLimiter::disabled();
+    rate_limiter.apply_settings(&settings.rate_limit);
 
     // Create shutdown channels
     let (shutdown_tx, _) = watch::channel(false);
@@ -80,15 +100,17 @@ async fn main() -> error::Result<()> {
     let (health_handle, health_shutdown) = HealthCheckerHandle::new();
     let health_checker =
         HealthChecker::new(db.clone(), HealthCheckerConfig::default(), selector.clone());
+    let health_settings = settings_tx.subscribe();
     let health_task = tokio::spawn(async move {
-        health_checker.run(health_shutdown).await;
+        health_checker.run(health_shutdown, health_settings).await;
     });
 
     // Start log cleanup service
     let (cleanup_handle, cleanup_shutdown) = LogCleanupHandle::new();
     let cleanup_service = LogCleanupService::new(db.clone(), LogCleanupConfig::default());
+    let cleanup_settings = settings_tx.subscribe();
     let cleanup_task = tokio::spawn(async move {
-        cleanup_service.run(cleanup_shutdown).await;
+        cleanup_service.run(cleanup_shutdown, cleanup_settings).await;
     });
 
     // Create proxy server
@@ -97,6 +119,7 @@ async fn main() -> error::Result<()> {
         selector.clone(),
         db.pool().clone(),
         Some(log_sender.clone()),
+        rate_limiter.clone(),
     );
 
     // Create API server
@@ -106,6 +129,8 @@ async fn main() -> error::Result<()> {
         db.clone(),
         selector.clone(),
         log_sender.clone(),
+        settings_tx.clone(),
+        rate_limiter.clone(),
     );
 
     // Start servers
