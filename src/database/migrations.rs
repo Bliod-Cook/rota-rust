@@ -83,6 +83,7 @@ fn get_migrations() -> Vec<(i32, &'static str, &'static str)> {
         (2, "settings_table", MIGRATION_002_SETTINGS_TABLE),
         (3, "logs_table", MIGRATION_003_LOGS_TABLE),
         (4, "proxy_requests_table", MIGRATION_004_PROXY_REQUESTS),
+        (5, "drop_unique_proxy_address", MIGRATION_005_DROP_UNIQUE_PROXY_ADDRESS),
     ]
 }
 
@@ -103,8 +104,7 @@ CREATE TABLE IF NOT EXISTS proxies (
     last_check TIMESTAMPTZ,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT unique_proxy_address UNIQUE (address)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Indexes for common queries
@@ -193,4 +193,9 @@ CREATE TABLE IF NOT EXISTS proxy_requests (
 CREATE INDEX IF NOT EXISTS idx_proxy_requests_timestamp ON proxy_requests(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_proxy_requests_proxy_id ON proxy_requests(proxy_id);
 CREATE INDEX IF NOT EXISTS idx_proxy_requests_success ON proxy_requests(success);
+"#;
+
+// Migration 5: Allow duplicate proxy addresses
+const MIGRATION_005_DROP_UNIQUE_PROXY_ADDRESS: &str = r#"
+ALTER TABLE proxies DROP CONSTRAINT IF EXISTS unique_proxy_address;
 "#;
