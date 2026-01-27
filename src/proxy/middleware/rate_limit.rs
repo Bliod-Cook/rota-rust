@@ -4,6 +4,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use governor::clock::DefaultClock;
@@ -13,16 +14,43 @@ use tracing::{debug, warn};
 
 use crate::error::{Result, RotaError};
 
+#[derive(Debug)]
+struct ClientLimiter {
+    limiter: Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    last_seen_ms: std::sync::atomic::AtomicU64,
+}
+
+impl ClientLimiter {
+    fn new(
+        limiter: Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+        now_ms: u64,
+    ) -> Self {
+        Self {
+            limiter,
+            last_seen_ms: std::sync::atomic::AtomicU64::new(now_ms),
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// Rate limiter for proxy requests
 pub struct RateLimiter {
     /// Whether rate limiting is enabled
     enabled: bool,
     /// Rate limiters per client IP
-    limiters: DashMap<String, Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>>,
+    limiters: Arc<DashMap<String, ClientLimiter>>,
     /// Requests per second limit
     requests_per_second: NonZeroU32,
     /// Burst size
     burst_size: NonZeroU32,
+    /// How long to keep per-client state without activity
+    max_idle: Duration,
 }
 
 impl RateLimiter {
@@ -30,9 +58,10 @@ impl RateLimiter {
     pub fn new(enabled: bool, requests_per_second: u32, burst_size: u32) -> Self {
         Self {
             enabled,
-            limiters: DashMap::new(),
+            limiters: Arc::new(DashMap::new()),
             requests_per_second: NonZeroU32::new(requests_per_second.max(1)).unwrap(),
             burst_size: NonZeroU32::new(burst_size.max(1)).unwrap(),
+            max_idle: Duration::from_secs(10 * 60),
         }
     }
 
@@ -73,24 +102,29 @@ impl RateLimiter {
         &self,
         client_ip: &str,
     ) -> Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>> {
-        self.limiters
-            .entry(client_ip.to_string())
-            .or_insert_with(|| {
-                let quota =
-                    Quota::per_second(self.requests_per_second).allow_burst(self.burst_size);
-                Arc::new(GovRateLimiter::direct(quota))
-            })
-            .clone()
+        let now_ms = now_ms();
+        let entry = self.limiters.entry(client_ip.to_string()).or_insert_with(|| {
+            let quota = Quota::per_second(self.requests_per_second).allow_burst(self.burst_size);
+            ClientLimiter::new(Arc::new(GovRateLimiter::direct(quota)), now_ms)
+        });
+
+        entry
+            .last_seen_ms
+            .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+
+        entry.limiter.clone()
     }
 
     /// Clean up old rate limiters (call periodically)
     pub fn cleanup(&self) {
-        // Remove entries that haven't been used recently
-        // This is a simple approach - in production you might want
-        // a more sophisticated LRU cache
-        self.limiters.retain(|_, limiter| {
-            // Keep if there are tokens available (recently used)
-            limiter.check().is_ok()
+        let now_ms = now_ms();
+        let max_idle_ms = self.max_idle.as_millis() as u64;
+
+        self.limiters.retain(|_, entry| {
+            let last_seen = entry
+                .last_seen_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            now_ms.saturating_sub(last_seen) <= max_idle_ms
         });
     }
 
@@ -104,9 +138,10 @@ impl Clone for RateLimiter {
     fn clone(&self) -> Self {
         Self {
             enabled: self.enabled,
-            limiters: self.limiters.clone(),
+            limiters: Arc::clone(&self.limiters),
             requests_per_second: self.requests_per_second,
             burst_size: self.burst_size,
+            max_idle: self.max_idle,
         }
     }
 }
