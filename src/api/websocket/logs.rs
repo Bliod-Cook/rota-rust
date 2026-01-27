@@ -30,13 +30,19 @@ async fn handle_logs_ws(socket: WebSocket, state: AppState) {
     let mut log_rx = state.log_sender.subscribe();
 
     // Spawn task to receive broadcasts and forward to channel
-    let forward_task = tokio::spawn(async move {
+    let mut forward_task = tokio::spawn(async move {
         loop {
             match log_rx.recv().await {
                 Ok(record) => {
                     // Use try_send to avoid blocking - fixes memory leak from Go
-                    if tx.try_send(record).is_err() {
-                        debug!("Logs WebSocket buffer full, dropping log entry");
+                    match tx.try_send(record) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            debug!("Logs WebSocket buffer full, dropping log entry");
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            break;
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -51,7 +57,7 @@ async fn handle_logs_ws(socket: WebSocket, state: AppState) {
     });
 
     // Spawn task to send logs to WebSocket
-    let send_task = tokio::spawn(async move {
+    let mut send_task = tokio::spawn(async move {
         while let Some(record) = rx.recv().await {
             match serde_json::to_string(&record) {
                 Ok(json) => {
@@ -67,7 +73,7 @@ async fn handle_logs_ws(socket: WebSocket, state: AppState) {
     });
 
     // Handle incoming messages (mainly for ping/pong and close)
-    let receive_task = tokio::spawn(async move {
+    let mut receive_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Close(_)) => {
@@ -89,16 +95,15 @@ async fn handle_logs_ws(socket: WebSocket, state: AppState) {
 
     // Wait for any task to complete
     tokio::select! {
-        _ = forward_task => {
-            debug!("Forward task ended");
-        }
-        _ = send_task => {
-            debug!("Send task ended");
-        }
-        _ = receive_task => {
-            debug!("Receive task ended");
-        }
+        _ = &mut forward_task => {}
+        _ = &mut send_task => {}
+        _ = &mut receive_task => {}
     }
+
+    forward_task.abort();
+    send_task.abort();
+    receive_task.abort();
+    let _ = tokio::join!(forward_task, send_task, receive_task);
 
     info!("Logs WebSocket disconnected");
 }
