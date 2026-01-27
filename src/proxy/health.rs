@@ -88,7 +88,8 @@ impl HealthChecker {
     /// Check all proxies and update their health status
     async fn check_all_proxies(&self) -> Result<()> {
         let repo = ProxyRepository::new(self.db.pool().clone());
-        let proxies = repo.get_all_usable().await?;
+        // Include failed proxies so they can recover when they become reachable again.
+        let proxies = repo.get_all().await?;
 
         info!("Checking health of {} proxies", proxies.len());
 
