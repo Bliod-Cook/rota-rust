@@ -316,7 +316,7 @@ impl ProxyHandler {
                 Ok(response) => {
                     let attempt_duration = attempt_start.elapsed();
                     let status_code = response.status().as_u16() as i32;
-                    let success = status_code < 400;
+                    let success = true;
 
                     let record = RequestRecord {
                         proxy_id: proxy.id,

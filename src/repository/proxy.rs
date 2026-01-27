@@ -291,44 +291,46 @@ impl ProxyRepository {
         response_time: i32,
         error_message: Option<&str>,
     ) -> Result<()> {
-        if success {
-            sqlx::query(
-                r#"
-                UPDATE proxies
-                SET requests = requests + 1,
-                    successful_requests = successful_requests + 1,
-                    avg_response_time = CASE
-                        WHEN successful_requests = 0 THEN $2
-                        ELSE ((avg_response_time * successful_requests) + $2) / (successful_requests + 1)
-                    END,
-                    status = 'active',
-                    last_error = NULL
-                WHERE id = $1
-                "#,
-            )
-            .bind(id)
-            .bind(response_time)
-            .execute(&self.pool)
-            .await?;
-        } else {
-            sqlx::query(
-                r#"
-                UPDATE proxies
-                SET requests = requests + 1,
-                    failed_requests = failed_requests + 1,
-                    last_error = $2,
-                    status = CASE
-                        WHEN (failed_requests + 1) >= 2 THEN 'failed'
+        sqlx::query(
+            r#"
+            UPDATE proxies
+            SET
+                requests = requests + 1,
+                successful_requests = CASE
+                    WHEN $2 THEN successful_requests + 1
+                    ELSE successful_requests
+                END,
+                failed_requests = CASE
+                    WHEN $2 THEN 0
+                    ELSE failed_requests + 1
+                END,
+                avg_response_time = (
+                    CASE
+                        WHEN requests = 0 THEN $3
+                        ELSE ((avg_response_time * requests) + $3) / (requests + 1)
+                    END
+                )::INTEGER,
+                last_check = NOW(),
+                last_error = CASE
+                    WHEN $2 THEN NULL
+                    ELSE $4
+                END,
+                status = CASE
+                    WHEN $2 THEN 'active'
+                    ELSE CASE
+                        WHEN (failed_requests + 1) >= 3 THEN 'failed'
                         ELSE status
                     END
-                WHERE id = $1
-                "#,
-            )
-            .bind(id)
-            .bind(error_message)
-            .execute(&self.pool)
-            .await?;
-        }
+                END
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(success)
+        .bind(response_time)
+        .bind(error_message)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
