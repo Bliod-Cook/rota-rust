@@ -446,6 +446,118 @@ mod tests {
     }
 
     #[test]
+    fn test_config_from_env_egress_proxy_rejects_query() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "http://egress.example:3128?foo=bar");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_rejects_fragment() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "http://egress.example:3128/#frag");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_rejects_path() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "http://egress.example:3128/some/path");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_defaults_port_by_scheme() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "http://egress.example");
+        let config = Config::from_env().unwrap();
+        assert_eq!(
+            config.proxy.egress_proxy,
+            Some(EgressProxyConfig {
+                protocol: EgressProxyProtocol::Http,
+                host: "egress.example".to_string(),
+                port: 80,
+                username: None,
+                password: None,
+            })
+        );
+
+        env::set_var("ROTA_EGRESS_PROXY", "socks5://egress.example");
+        let config = Config::from_env().unwrap();
+        assert_eq!(
+            config.proxy.egress_proxy,
+            Some(EgressProxyConfig {
+                protocol: EgressProxyProtocol::Socks5,
+                host: "egress.example".to_string(),
+                port: 1080,
+                username: None,
+                password: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_http_allows_username_without_password() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "http://user@egress.example:3128");
+        let config = Config::from_env().unwrap();
+
+        assert_eq!(
+            config.proxy.egress_proxy,
+            Some(EgressProxyConfig {
+                protocol: EgressProxyProtocol::Http,
+                host: "egress.example".to_string(),
+                port: 3128,
+                username: Some("user".to_string()),
+                password: Some(String::new()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_accepts_socks5h_scheme() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "socks5h://egress.example:1080");
+        let config = Config::from_env().unwrap();
+
+        assert_eq!(
+            config.proxy.egress_proxy,
+            Some(EgressProxyConfig {
+                protocol: EgressProxyProtocol::Socks5,
+                host: "egress.example".to_string(),
+                port: 1080,
+                username: None,
+                password: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_config_from_env_egress_proxy_rejects_unsupported_scheme() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::new(CONFIG_ENV_KEYS);
+
+        env::set_var("ROTA_EGRESS_PROXY", "ftp://egress.example:21");
+        let err = Config::from_env().unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[test]
     fn test_config_formatters() {
         let config = Config {
             proxy: ProxyServerConfig {

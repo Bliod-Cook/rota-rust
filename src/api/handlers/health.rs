@@ -116,3 +116,32 @@ pub async fn status(State(state): State<AppState>) -> Result<impl IntoResponse, 
 
     Ok(Json(response))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn test_health_check_response_shape() {
+        let response = health_check().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("failed to collect body")
+            .to_bytes();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("body must be valid json");
+
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("healthy"));
+        assert_eq!(
+            payload.get("service").and_then(|v| v.as_str()),
+            Some("rota-proxy")
+        );
+    }
+}

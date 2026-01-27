@@ -199,3 +199,35 @@ pub async fn add_compression_policy(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sqlx::postgres::PgPoolOptions;
+
+    fn lazy_pool() -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://rota:rota_password@localhost:5432/rota")
+            .expect("failed to create lazy PgPool")
+    }
+
+    #[tokio::test]
+    async fn test_add_retention_policy_rejects_unknown_table_name() {
+        let pool = lazy_pool();
+        let err = add_retention_policy(&pool, "not_allowed", 30)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+
+    #[tokio::test]
+    async fn test_add_compression_policy_rejects_unknown_table_name() {
+        let pool = lazy_pool();
+        let err = add_compression_policy(&pool, "not_allowed", 30)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RotaError::InvalidConfig(_)));
+    }
+}

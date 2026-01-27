@@ -180,3 +180,58 @@ pub mod keys {
     pub const HEALTHCHECK: &str = "healthcheck";
     pub const LOG_RETENTION: &str = "log_retention";
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_authentication_password_is_write_only() {
+        let settings = AuthenticationSettings {
+            enabled: true,
+            username: "admin".to_string(),
+            password: "secret".to_string(),
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value.get("username").and_then(|v| v.as_str()), Some("admin"));
+        assert_eq!(value.get("enabled").and_then(|v| v.as_bool()), Some(true));
+        assert!(value.get("password").is_none());
+
+        let decoded: AuthenticationSettings =
+            serde_json::from_str(r#"{"enabled":true,"username":"admin","password":"secret"}"#)
+                .unwrap();
+        assert_eq!(decoded.password, "secret");
+
+        let decoded_without_password: AuthenticationSettings =
+            serde_json::from_str(r#"{"enabled":true,"username":"admin"}"#).unwrap();
+        assert_eq!(decoded_without_password.password, "");
+    }
+
+    #[test]
+    fn test_settings_serialization_never_includes_password() {
+        let settings = Settings {
+            authentication: AuthenticationSettings {
+                enabled: true,
+                username: "admin".to_string(),
+                password: "secret".to_string(),
+            },
+            ..Settings::default()
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            value
+                .get("authentication")
+                .and_then(|v| v.get("username"))
+                .and_then(|v| v.as_str()),
+            Some("admin")
+        );
+        assert!(
+            value
+                .get("authentication")
+                .and_then(|v| v.get("password"))
+                .is_none()
+        );
+    }
+}
