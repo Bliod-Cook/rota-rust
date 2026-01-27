@@ -86,8 +86,14 @@ impl ProxyServer {
         let listener = TcpListener::bind(addr).await?;
         info!("Proxy server listening on {}", addr);
 
+        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
+        cleanup_interval.tick().await; // Skip immediate tick
+
         loop {
             tokio::select! {
+                _ = cleanup_interval.tick() => {
+                    self.rate_limiter.cleanup();
+                }
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, client_addr)) => {
