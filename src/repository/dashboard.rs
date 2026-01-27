@@ -282,3 +282,18 @@ impl DashboardRepository {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bucket_seconds_mapping() {
+        assert_eq!(DashboardRepository::bucket_seconds("1 minute"), 60);
+        assert_eq!(DashboardRepository::bucket_seconds("5 minutes"), 5 * 60);
+        assert_eq!(DashboardRepository::bucket_seconds("1 hour"), 60 * 60);
+        assert_eq!(DashboardRepository::bucket_seconds("6 hours"), 6 * 60 * 60);
+        assert_eq!(DashboardRepository::bucket_seconds("1 day"), 24 * 60 * 60);
+        assert_eq!(DashboardRepository::bucket_seconds("unknown"), 60 * 60);
+    }
+}
