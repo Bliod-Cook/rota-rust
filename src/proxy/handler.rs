@@ -155,6 +155,7 @@ impl ProxyHandler {
                         error_message: None,
                         timestamp: chrono::Utc::now(),
                     };
+                    self.broadcast_request_record(&record);
                     self.persist_request_record(record);
 
                     selected = Some((proxy.clone(), connection));
@@ -164,16 +165,6 @@ impl ProxyHandler {
                     info!(
                         "CONNECT tunnel established through {} to {}:{}",
                         proxy.address, target_host, target_port
-                    );
-
-                    // Log the request
-                    self.log_request(
-                        "CONNECT",
-                        &authority,
-                        true,
-                        attempt_duration.as_millis() as i32,
-                        Some(&proxy),
-                        None,
                     );
 
                     break;
@@ -191,6 +182,7 @@ impl ProxyHandler {
                         error_message: Some(e.to_string()),
                         timestamp: chrono::Utc::now(),
                     };
+                    self.broadcast_request_record(&record);
                     self.persist_request_record(record);
 
                     warn!(
@@ -212,6 +204,7 @@ impl ProxyHandler {
                         error_message: Some(RotaError::Timeout.to_string()),
                         timestamp: chrono::Utc::now(),
                     };
+                    self.broadcast_request_record(&record);
                     self.persist_request_record(record);
 
                     warn!(
@@ -336,19 +329,8 @@ impl ProxyHandler {
                         error_message: None,
                         timestamp: chrono::Utc::now(),
                     };
+                    self.broadcast_request_record(&record);
                     self.persist_request_record(record);
-
-                    let duration = start.elapsed();
-
-                    // Log the request
-                    self.log_request(
-                        method.as_str(),
-                        &requested_url,
-                        success,
-                        duration.as_millis() as i32,
-                        Some(&proxy),
-                        None,
-                    );
 
                     return Ok(response);
                 }
@@ -365,6 +347,7 @@ impl ProxyHandler {
                         error_message: Some(e.to_string()),
                         timestamp: chrono::Utc::now(),
                     };
+                    self.broadcast_request_record(&record);
                     self.persist_request_record(record);
 
                     warn!(
@@ -379,15 +362,20 @@ impl ProxyHandler {
         let duration = start.elapsed();
         error!("All HTTP attempts failed after {} attempts", max_attempts);
 
-        // Log failed request
-        self.log_request(
-            method.as_str(),
-            &uri.to_string(),
-            false,
-            duration.as_millis() as i32,
-            None,
-            last_error.as_ref().map(|e| e.to_string()).as_deref(),
-        );
+        // Record the overall failure (no specific proxy to attribute).
+        let record = RequestRecord {
+            proxy_id: 0,
+            proxy_address: String::new(),
+            requested_url: uri.to_string(),
+            method: method_str.clone(),
+            success: false,
+            response_time: duration.as_millis() as i32,
+            status_code: 502,
+            error_message: last_error.as_ref().map(|e| e.to_string()),
+            timestamp: chrono::Utc::now(),
+        };
+        self.broadcast_request_record(&record);
+        self.persist_request_record(record);
 
         Ok(self.error_response(
             StatusCode::BAD_GATEWAY,
@@ -532,6 +520,16 @@ impl ProxyHandler {
         });
     }
 
+    fn broadcast_request_record(&self, record: &RequestRecord) {
+        if !self.config.enable_logging {
+            return;
+        }
+
+        if let Some(sender) = &self.log_sender {
+            let _ = sender.send(record.clone());
+        }
+    }
+
     /// Create an error response
     fn error_response(&self, status: StatusCode, message: &str) -> Response<Full<Bytes>> {
         Response::builder()
@@ -541,37 +539,8 @@ impl ProxyHandler {
             .unwrap()
     }
 
-    /// Log a request
-    fn log_request(
-        &self,
-        method: &str,
-        url: &str,
-        success: bool,
-        response_time: i32,
-        proxy: Option<&Proxy>,
-        error_message: Option<&str>,
-    ) {
-        if !self.config.enable_logging {
-            return;
-        }
-
-        let record = RequestRecord {
-            proxy_id: proxy.map(|p| p.id).unwrap_or(0),
-            proxy_address: proxy.map(|p| p.address.clone()).unwrap_or_default(),
-            requested_url: url.to_string(),
-            method: method.to_string(),
-            success,
-            response_time,
-            status_code: if success { 200 } else { 502 },
-            error_message: error_message.map(|s| s.to_string()),
-            timestamp: chrono::Utc::now(),
-        };
-
-        if let Some(sender) = &self.log_sender {
-            // Use try_send to avoid blocking - this fixes the memory leak issue from Go
-            let _ = sender.send(record);
-        }
-    }
+    // NOTE: logging/broadcast is handled via `broadcast_request_record` so status codes stay
+    // consistent with persisted records.
 }
 
 /// Check if a header is a hop-by-hop header that should not be forwarded
