@@ -10,6 +10,8 @@ use tokio::sync::watch;
 use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, instrument, warn};
 
+use futures::StreamExt;
+
 use crate::database::Database;
 use crate::error::Result;
 use crate::models::{Proxy, Settings};
@@ -102,26 +104,32 @@ impl HealthChecker {
 
         info!("Checking health of {} proxies", proxies.len());
 
-        let mut healthy_count = 0;
-        let mut unhealthy_count = 0;
+        let worker_count = settings.healthcheck.workers.max(1) as usize;
+        let settings = settings.clone();
 
-        for proxy in &proxies {
-            let (is_healthy, error_msg) = self.check_proxy(proxy, settings).await;
+        let results = futures::stream::iter(proxies)
+            .map(|proxy| {
+                let repo = repo.clone();
+                let settings = settings.clone();
+                async move {
+                    let (is_healthy, error_msg) = self.check_proxy(&proxy, &settings).await;
 
-            if is_healthy {
-                healthy_count += 1;
-            } else {
-                unhealthy_count += 1;
-            }
+                    if let Err(e) = repo
+                        .record_health_check(proxy.id, is_healthy, error_msg.as_deref())
+                        .await
+                    {
+                        warn!("Failed to record health check for {}: {}", proxy.address, e);
+                    }
 
-            // Update health status in database
-            if let Err(e) = repo
-                .record_health_check(proxy.id, is_healthy, error_msg.as_deref())
-                .await
-            {
-                warn!("Failed to record health check for {}: {}", proxy.address, e);
-            }
-        }
+                    is_healthy
+                }
+            })
+            .buffer_unordered(worker_count)
+            .collect::<Vec<bool>>()
+            .await;
+
+        let healthy_count = results.iter().filter(|&&v| v).count();
+        let unhealthy_count = results.len().saturating_sub(healthy_count);
 
         // Refresh the selector with updated proxy list
         // Re-fetch proxies to get updated status
