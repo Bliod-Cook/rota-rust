@@ -2,8 +2,8 @@
 //!
 //! Fixed: Uses explicit domain whitelist instead of allowing all origins.
 
-use axum::http::{HeaderValue, Method};
 use axum::http::header;
+use axum::http::{HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 use tracing::debug;
 

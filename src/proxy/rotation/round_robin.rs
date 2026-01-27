@@ -47,7 +47,10 @@ impl ProxySelector for RoundRobinSelector {
         // Atomically increment and get the previous value, then wrap around
         let idx = self.index.fetch_add(1, Ordering::Relaxed) % len;
 
-        proxies.get(idx).cloned().ok_or(RotaError::NoProxiesAvailable)
+        proxies
+            .get(idx)
+            .cloned()
+            .ok_or(RotaError::NoProxiesAvailable)
     }
 
     async fn refresh(&self, proxies: Vec<Proxy>) -> Result<()> {

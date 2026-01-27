@@ -74,7 +74,10 @@ impl ProxyRepository {
     }
 
     /// List proxies with pagination, filtering, and sorting
-    pub async fn list(&self, params: &ProxyListParams) -> Result<PaginatedResponse<ProxyWithStats>> {
+    pub async fn list(
+        &self,
+        params: &ProxyListParams,
+    ) -> Result<PaginatedResponse<ProxyWithStats>> {
         let page = params.page.unwrap_or(1).max(1);
         let limit = params.limit.unwrap_or(20).clamp(1, 100);
         let offset = (page - 1) * limit;
@@ -377,12 +380,10 @@ impl ProxyRepository {
 
     /// Get proxy count by status
     pub async fn count_by_status(&self, status: &str) -> Result<i64> {
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM proxies WHERE status = $1",
-        )
-        .bind(status)
-        .fetch_one(&self.pool)
-        .await?;
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM proxies WHERE status = $1")
+            .bind(status)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(count)
     }

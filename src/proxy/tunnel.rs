@@ -151,9 +151,10 @@ mod tests {
         let (mut target_client, target_server) = tokio::io::duplex(1024);
 
         // Spawn the bidirectional copy
-        let copy_handle = tokio::spawn(async move {
-            TunnelHandler::copy_bidirectional(client, target_server).await
-        });
+        let copy_handle =
+            tokio::spawn(
+                async move { TunnelHandler::copy_bidirectional(client, target_server).await },
+            );
 
         server.write_all(b"hello from client").await.unwrap();
         server.shutdown().await.unwrap();

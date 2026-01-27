@@ -92,7 +92,11 @@ async fn convert_to_hypertable(
 
 /// Add or update retention policy for a hypertable
 /// Uses parameterized values to prevent SQL injection
-pub async fn add_retention_policy(pool: &PgPool, table_name: &str, retention_days: i32) -> Result<()> {
+pub async fn add_retention_policy(
+    pool: &PgPool,
+    table_name: &str,
+    retention_days: i32,
+) -> Result<()> {
     // Validate table name against whitelist
     if !ALLOWED_HYPERTABLES.contains(&table_name) {
         return Err(RotaError::InvalidConfig(format!(

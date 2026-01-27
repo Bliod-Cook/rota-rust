@@ -102,9 +102,9 @@ impl LogCleanupService {
         // Convert retention interval to check interval
         // Check more frequently for shorter retention periods
         let new_interval_secs = match settings.log_retention.retention_days {
-            0..=1 => 300,    // 5 minutes for 0-1 day retention
-            2..=7 => 3600,   // 1 hour for 2-7 days
-            _ => 86400,      // 1 day for longer retention
+            0..=1 => 300,  // 5 minutes for 0-1 day retention
+            2..=7 => 3600, // 1 hour for 2-7 days
+            _ => 86400,    // 1 day for longer retention
         };
 
         let current = self.current_interval_secs.load(Ordering::Relaxed);
@@ -115,7 +115,8 @@ impl LogCleanupService {
                 "Log cleanup interval changed from {}s to {}s",
                 current, new_interval_secs
             );
-            self.current_interval_secs.store(new_interval_secs, Ordering::Relaxed);
+            self.current_interval_secs
+                .store(new_interval_secs, Ordering::Relaxed);
         }
 
         Ok(())
@@ -142,7 +143,10 @@ impl LogCleanupService {
         let deleted = log_repo.delete_older_than(retention_days).await?;
 
         if deleted > 0 {
-            info!("Deleted {} log entries older than {} days", deleted, retention_days);
+            info!(
+                "Deleted {} log entries older than {} days",
+                deleted, retention_days
+            );
         } else {
             debug!("No old log entries to delete");
         }

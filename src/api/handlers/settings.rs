@@ -11,9 +11,7 @@ use crate::models::Settings;
 use crate::repository::SettingsRepository;
 
 /// Get all settings
-pub async fn get_settings(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, RotaError> {
+pub async fn get_settings(State(state): State<AppState>) -> Result<impl IntoResponse, RotaError> {
     let repo = SettingsRepository::new(state.db.pool().clone());
     let settings = repo.get_all().await?;
     Ok(Json(settings))

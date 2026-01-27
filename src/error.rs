@@ -219,7 +219,10 @@ mod tests {
             .status_code(),
             StatusCode::TOO_MANY_REQUESTS
         );
-        assert_eq!(RotaError::Timeout.status_code(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(
+            RotaError::Timeout.status_code(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
         assert_eq!(
             RotaError::NoProxiesAvailable.status_code(),
             StatusCode::SERVICE_UNAVAILABLE

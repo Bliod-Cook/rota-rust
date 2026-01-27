@@ -13,9 +13,7 @@ use crate::models::{ChartTimeRange, SystemMetrics};
 use crate::repository::DashboardRepository;
 
 /// Get dashboard statistics
-pub async fn get_stats(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, RotaError> {
+pub async fn get_stats(State(state): State<AppState>) -> Result<impl IntoResponse, RotaError> {
     let repo = DashboardRepository::new(state.db.pool().clone());
     let stats = repo.get_stats().await?;
     Ok(Json(stats))

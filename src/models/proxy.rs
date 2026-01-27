@@ -138,9 +138,7 @@ impl Proxy {
 
     /// Check if proxy is usable
     pub fn is_usable(&self) -> bool {
-        self.status_enum()
-            .map(|s| s.is_usable())
-            .unwrap_or(false)
+        self.status_enum().map(|s| s.is_usable()).unwrap_or(false)
     }
 
     /// Check if proxy matches filter criteria
@@ -148,7 +146,10 @@ impl Proxy {
         // Protocol filter
         if !settings.allowed_protocols.is_empty() {
             if let Some(proto) = self.protocol_enum() {
-                if !settings.allowed_protocols.contains(&proto.as_str().to_string()) {
+                if !settings
+                    .allowed_protocols
+                    .contains(&proto.as_str().to_string())
+                {
                     return false;
                 }
             }
@@ -202,7 +203,10 @@ pub struct ProxyWithStats {
 impl From<Proxy> for ProxyWithStats {
     fn from(proxy: Proxy) -> Self {
         let success_rate = proxy.success_rate();
-        ProxyWithStats { proxy, success_rate }
+        ProxyWithStats {
+            proxy,
+            success_rate,
+        }
     }
 }
 
@@ -300,7 +304,10 @@ mod tests {
     fn test_proxy_protocol_parsing_and_helpers() {
         assert_eq!(ProxyProtocol::from_str("HTTP"), Some(ProxyProtocol::Http));
         assert_eq!(ProxyProtocol::from_str("https"), Some(ProxyProtocol::Https));
-        assert_eq!(ProxyProtocol::from_str("SOCKS4A"), Some(ProxyProtocol::Socks4a));
+        assert_eq!(
+            ProxyProtocol::from_str("SOCKS4A"),
+            Some(ProxyProtocol::Socks4a)
+        );
         assert_eq!(ProxyProtocol::from_str("unknown"), None);
 
         assert!(ProxyProtocol::Socks5.is_socks());

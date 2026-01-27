@@ -76,8 +76,8 @@ impl RateLimiter {
         self.limiters
             .entry(client_ip.to_string())
             .or_insert_with(|| {
-                let quota = Quota::per_second(self.requests_per_second)
-                    .allow_burst(self.burst_size);
+                let quota =
+                    Quota::per_second(self.requests_per_second).allow_burst(self.burst_size);
                 Arc::new(GovRateLimiter::direct(quota))
             })
             .clone()
@@ -130,7 +130,11 @@ mod tests {
 
         // Should allow up to burst size
         for i in 0..10 {
-            assert!(limiter.check("192.168.1.1").is_ok(), "Failed on request {}", i);
+            assert!(
+                limiter.check("192.168.1.1").is_ok(),
+                "Failed on request {}",
+                i
+            );
         }
     }
 

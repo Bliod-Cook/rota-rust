@@ -24,10 +24,7 @@ impl RequestLogging {
         let duration = start.elapsed();
         let status = response.status();
 
-        info!(
-            "{} {} - {} in {:?}",
-            method, uri, status, duration
-        );
+        info!("{} {} - {} in {:?}", method, uri, status, duration);
 
         response
     }

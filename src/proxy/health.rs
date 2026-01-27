@@ -109,10 +109,7 @@ impl HealthChecker {
                 .record_health_check(proxy.id, is_healthy, error_msg.as_deref())
                 .await
             {
-                warn!(
-                    "Failed to record health check for {}: {}",
-                    proxy.address, e
-                );
+                warn!("Failed to record health check for {}: {}", proxy.address, e);
             }
         }
 
@@ -138,8 +135,11 @@ impl HealthChecker {
         debug!("Checking health of proxy at {}", proxy.address);
 
         // First, check if we can connect to the proxy
-        let connect_result =
-            timeout(self.config.check_timeout, TcpStream::connect(&proxy.address)).await;
+        let connect_result = timeout(
+            self.config.check_timeout,
+            TcpStream::connect(&proxy.address),
+        )
+        .await;
 
         match connect_result {
             Ok(Ok(_stream)) => {
@@ -205,10 +205,7 @@ impl HealthChecker {
             Ok(Ok(n)) if n > 0 => {
                 let response_str = String::from_utf8_lossy(&response[..n]);
                 if response_str.contains("HTTP/") {
-                    debug!(
-                        "Proxy {} is healthy (HTTP check successful)",
-                        proxy.address
-                    );
+                    debug!("Proxy {} is healthy (HTTP check successful)", proxy.address);
                     (true, None)
                 } else {
                     let msg = "invalid HTTP response".to_string();

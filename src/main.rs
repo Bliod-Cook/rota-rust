@@ -18,20 +18,22 @@ mod proxy;
 mod repository;
 mod services;
 
+use api::ApiServer;
 use config::Config;
 use database::Database;
 use proxy::health::{HealthChecker, HealthCheckerConfig, HealthCheckerHandle};
 use proxy::rotation::{create_selector, RotationStrategy};
 use proxy::server::ProxyServer;
-use api::ApiServer;
 use services::{LogCleanupConfig, LogCleanupHandle, LogCleanupService};
 
 #[tokio::main]
 async fn main() -> error::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "rota=info,tower_http=debug".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "rota=info,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -51,7 +53,10 @@ async fn main() -> error::Result<()> {
 
     // Initialize TimescaleDB if available
     if let Err(e) = database::timescale::setup_timescaledb(db.pool()).await {
-        info!("TimescaleDB setup skipped or failed: {} (this is OK if not using TimescaleDB)", e);
+        info!(
+            "TimescaleDB setup skipped or failed: {} (this is OK if not using TimescaleDB)",
+            e
+        );
     }
 
     // Create log broadcast channel (bounded to prevent memory leaks)
@@ -73,11 +78,8 @@ async fn main() -> error::Result<()> {
 
     // Start health checker
     let (health_handle, health_shutdown) = HealthCheckerHandle::new();
-    let health_checker = HealthChecker::new(
-        db.clone(),
-        HealthCheckerConfig::default(),
-        selector.clone(),
-    );
+    let health_checker =
+        HealthChecker::new(db.clone(), HealthCheckerConfig::default(), selector.clone());
     let health_task = tokio::spawn(async move {
         health_checker.run(health_shutdown).await;
     });
@@ -123,8 +125,7 @@ async fn main() -> error::Result<()> {
 
     info!(
         "Servers started - Proxy: {}:{}, API: {}:{}",
-        config.proxy.host, config.proxy.port,
-        config.api.host, config.api.port
+        config.proxy.host, config.proxy.port, config.api.host, config.api.port
     );
 
     // Wait for shutdown signal

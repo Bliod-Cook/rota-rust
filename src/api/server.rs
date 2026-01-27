@@ -4,6 +4,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use tokio::sync::{broadcast, watch};
@@ -25,6 +26,7 @@ pub struct AppState {
     pub db: Database,
     pub config: Config,
     pub jwt_auth: JwtAuth,
+    pub started_at: Instant,
     pub selector: Arc<dyn ProxySelector>,
     pub log_sender: broadcast::Sender<RequestRecord>,
 }
@@ -50,11 +52,15 @@ impl ApiServer {
             db,
             config: full_config,
             jwt_auth,
+            started_at: Instant::now(),
             selector,
             log_sender,
         };
 
-        Self { config: api_config, state }
+        Self {
+            config: api_config,
+            state,
+        }
     }
 
     /// Build the router

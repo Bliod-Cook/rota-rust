@@ -55,7 +55,10 @@ pub async fn get_proxy(
 
     match proxy {
         Some(p) => Ok(Json(p)),
-        None => Err(RotaError::NotFound(format!("Proxy with id {} not found", id))),
+        None => Err(RotaError::NotFound(format!(
+            "Proxy with id {} not found",
+            id
+        ))),
     }
 }
 
@@ -101,7 +104,10 @@ pub async fn update_proxy(
             info!(id = p.id, address = %p.address, "Updated proxy");
             Ok(Json(p))
         }
-        None => Err(RotaError::NotFound(format!("Proxy with id {} not found", id))),
+        None => Err(RotaError::NotFound(format!(
+            "Proxy with id {} not found",
+            id
+        ))),
     }
 }
 
@@ -122,7 +128,10 @@ pub async fn delete_proxy(
         info!(id = id, "Deleted proxy");
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(RotaError::NotFound(format!("Proxy with id {} not found", id)))
+        Err(RotaError::NotFound(format!(
+            "Proxy with id {} not found",
+            id
+        )))
     }
 }
 
@@ -169,9 +178,15 @@ pub async fn toggle_proxy(
                     );
                     Ok(Json(updated_proxy))
                 }
-                None => Err(RotaError::NotFound(format!("Proxy with id {} not found", id))),
+                None => Err(RotaError::NotFound(format!(
+                    "Proxy with id {} not found",
+                    id
+                ))),
             }
         }
-        None => Err(RotaError::NotFound(format!("Proxy with id {} not found", id))),
+        None => Err(RotaError::NotFound(format!(
+            "Proxy with id {} not found",
+            id
+        ))),
     }
 }

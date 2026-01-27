@@ -113,10 +113,8 @@ impl ProxyHandler {
                 Ok(p) => p,
                 Err(e) => {
                     error!("No proxy available: {}", e);
-                    return Ok(self.error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "No proxies available",
-                    ));
+                    return Ok(self
+                        .error_response(StatusCode::SERVICE_UNAVAILABLE, "No proxies available"));
                 }
             };
 
@@ -144,14 +142,7 @@ impl ProxyHandler {
                     );
 
                     // Log the request
-                    self.log_request(
-                        "CONNECT",
-                        &authority,
-                        true,
-                        0,
-                        Some(&proxy),
-                        None,
-                    );
+                    self.log_request("CONNECT", &authority, true, 0, Some(&proxy), None);
 
                     return Ok(Response::builder()
                         .status(StatusCode::OK)
@@ -222,10 +213,8 @@ impl ProxyHandler {
                 Ok(p) => p,
                 Err(e) => {
                     error!("No proxy available: {}", e);
-                    return Ok(self.error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "No proxies available",
-                    ));
+                    return Ok(self
+                        .error_response(StatusCode::SERVICE_UNAVAILABLE, "No proxies available"));
                 }
             };
 
@@ -238,7 +227,13 @@ impl ProxyHandler {
             );
 
             match self
-                .forward_request(&proxy, &parts, body_bytes.clone(), &target_host, target_port)
+                .forward_request(
+                    &proxy,
+                    &parts,
+                    body_bytes.clone(),
+                    &target_host,
+                    target_port,
+                )
                 .await
             {
                 Ok(response) => {
@@ -300,9 +295,26 @@ impl ProxyHandler {
     ) -> Result<Response<Full<Bytes>>> {
         // Build the full target URL
         let uri_str = if target_port == 80 {
-            format!("http://{}{}", target_host, parts.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"))
+            format!(
+                "http://{}{}",
+                target_host,
+                parts
+                    .uri
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/")
+            )
         } else {
-            format!("http://{}:{}{}", target_host, target_port, parts.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"))
+            format!(
+                "http://{}:{}{}",
+                target_host,
+                target_port,
+                parts
+                    .uri
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/")
+            )
         };
 
         // Connect to proxy (address format is "host:port")
@@ -329,7 +341,8 @@ impl ProxyHandler {
         // Add proxy authentication if needed
         if let (Some(username), Some(password)) = (&proxy.username, &proxy.password) {
             let credentials = format!("{}:{}", username, password);
-            let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, credentials);
+            let encoded =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, credentials);
             builder = builder.header(PROXY_AUTHORIZATION, format!("Basic {}", encoded));
         }
 
@@ -351,17 +364,20 @@ impl ProxyHandler {
         });
 
         // Send request with timeout
-        let response = tokio::time::timeout(self.config.request_timeout, sender.send_request(request))
-            .await
-            .map_err(|_| RotaError::Timeout)?
-            .map_err(|e| RotaError::ProxyConnectionFailed(format!("Request failed: {}", e)))?;
+        let response =
+            tokio::time::timeout(self.config.request_timeout, sender.send_request(request))
+                .await
+                .map_err(|_| RotaError::Timeout)?
+                .map_err(|e| RotaError::ProxyConnectionFailed(format!("Request failed: {}", e)))?;
 
         // Collect response body
         let (parts, body) = response.into_parts();
         let body_bytes = body
             .collect()
             .await
-            .map_err(|e| RotaError::ProxyConnectionFailed(format!("Failed to read response: {}", e)))?
+            .map_err(|e| {
+                RotaError::ProxyConnectionFailed(format!("Failed to read response: {}", e))
+            })?
             .to_bytes();
 
         Ok(Response::from_parts(parts, Full::new(body_bytes)))

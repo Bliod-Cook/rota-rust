@@ -134,7 +134,10 @@ mod tests {
 
     #[test]
     fn test_rotation_strategy_from_str() {
-        assert_eq!(RotationStrategy::from_str("random"), RotationStrategy::Random);
+        assert_eq!(
+            RotationStrategy::from_str("random"),
+            RotationStrategy::Random
+        );
         assert_eq!(
             RotationStrategy::from_str("round-robin"),
             RotationStrategy::RoundRobin

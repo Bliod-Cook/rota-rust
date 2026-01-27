@@ -102,14 +102,26 @@ impl Config {
                 })?,
                 host: get_env_or("PROXY_HOST", "0.0.0.0"),
                 max_retries: get_env_or("PROXY_MAX_RETRIES", "3").parse().unwrap_or(3),
-                connect_timeout: get_env_or("PROXY_CONNECT_TIMEOUT", "10").parse().unwrap_or(10),
-                request_timeout: get_env_or("PROXY_REQUEST_TIMEOUT", "30").parse().unwrap_or(30),
-                auth_enabled: get_env_or("PROXY_AUTH_ENABLED", "false").parse().unwrap_or(false),
+                connect_timeout: get_env_or("PROXY_CONNECT_TIMEOUT", "10")
+                    .parse()
+                    .unwrap_or(10),
+                request_timeout: get_env_or("PROXY_REQUEST_TIMEOUT", "30")
+                    .parse()
+                    .unwrap_or(30),
+                auth_enabled: get_env_or("PROXY_AUTH_ENABLED", "false")
+                    .parse()
+                    .unwrap_or(false),
                 auth_username: get_env_or("PROXY_AUTH_USERNAME", ""),
                 auth_password: get_env_or("PROXY_AUTH_PASSWORD", ""),
-                rate_limit_enabled: get_env_or("PROXY_RATE_LIMIT_ENABLED", "false").parse().unwrap_or(false),
-                rate_limit_per_second: get_env_or("PROXY_RATE_LIMIT_PER_SECOND", "100").parse().unwrap_or(100),
-                rate_limit_burst: get_env_or("PROXY_RATE_LIMIT_BURST", "200").parse().unwrap_or(200),
+                rate_limit_enabled: get_env_or("PROXY_RATE_LIMIT_ENABLED", "false")
+                    .parse()
+                    .unwrap_or(false),
+                rate_limit_per_second: get_env_or("PROXY_RATE_LIMIT_PER_SECOND", "100")
+                    .parse()
+                    .unwrap_or(100),
+                rate_limit_burst: get_env_or("PROXY_RATE_LIMIT_BURST", "200")
+                    .parse()
+                    .unwrap_or(200),
                 rotation_strategy: get_env_or("PROXY_ROTATION_STRATEGY", "random"),
             },
             api: ApiServerConfig {
@@ -136,17 +148,11 @@ impl Config {
                 max_connections: get_env_or("DB_MAX_CONNECTIONS", "50")
                     .parse()
                     .map_err(|_| {
-                        RotaError::InvalidConfig(
-                            "DB_MAX_CONNECTIONS must be a valid number".into(),
-                        )
+                        RotaError::InvalidConfig("DB_MAX_CONNECTIONS must be a valid number".into())
                     })?,
-                min_connections: get_env_or("DB_MIN_CONNECTIONS", "5")
-                    .parse()
-                    .map_err(|_| {
-                        RotaError::InvalidConfig(
-                            "DB_MIN_CONNECTIONS must be a valid number".into(),
-                        )
-                    })?,
+                min_connections: get_env_or("DB_MIN_CONNECTIONS", "5").parse().map_err(|_| {
+                    RotaError::InvalidConfig("DB_MIN_CONNECTIONS must be a valid number".into())
+                })?,
             },
             admin: AdminConfig {
                 username: get_env_or("ROTA_ADMIN_USER", "admin"),
@@ -296,7 +302,10 @@ mod tests {
         assert_eq!(config.api.port, 9001);
         assert_eq!(
             config.api.cors_origins,
-            vec!["https://a.example".to_string(), "https://b.example".to_string()]
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
         );
         assert_eq!(config.database.host, "db.example");
     }

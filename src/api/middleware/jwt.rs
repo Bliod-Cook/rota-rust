@@ -74,11 +74,10 @@ impl JwtAuth {
     pub fn generate_token(&self, user_id: &str, expiry_hours: i64) -> Result<String, AuthError> {
         let claims = Claims::new(user_id, expiry_hours);
 
-        encode(&Header::default(), &claims, &self.encoding_key)
-            .map_err(|e| {
-                error!("Failed to generate JWT: {}", e);
-                AuthError::TokenCreation
-            })
+        encode(&Header::default(), &claims, &self.encoding_key).map_err(|e| {
+            error!("Failed to generate JWT: {}", e);
+            AuthError::TokenCreation
+        })
     }
 
     /// Validate a JWT token and return the claims
@@ -116,7 +115,9 @@ impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Invalid credentials"),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token"),
+            AuthError::TokenCreation => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create token")
+            }
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             AuthError::MissingToken => (StatusCode::UNAUTHORIZED, "Missing authorization token"),
         };
@@ -210,10 +211,7 @@ mod tests {
 
     #[test]
     fn test_extract_token() {
-        assert_eq!(
-            JwtAuth::extract_token("Bearer abc123"),
-            Some("abc123")
-        );
+        assert_eq!(JwtAuth::extract_token("Bearer abc123"), Some("abc123"));
         assert_eq!(JwtAuth::extract_token("abc123"), None);
     }
 }

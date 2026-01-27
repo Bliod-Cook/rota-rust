@@ -175,12 +175,11 @@ impl LogRepository {
 
     /// Delete logs older than specified days
     pub async fn delete_older_than(&self, days: i32) -> Result<u64> {
-        let result = sqlx::query(
-            "DELETE FROM logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1",
-        )
-        .bind(days)
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM logs WHERE timestamp < NOW() - INTERVAL '1 day' * $1")
+                .bind(days)
+                .execute(&self.pool)
+                .await?;
 
         Ok(result.rows_affected())
     }

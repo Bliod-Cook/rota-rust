@@ -51,7 +51,11 @@ impl ProxyServer {
         let handler = Arc::new(ProxyHandler::new(selector, handler_config, log_sender));
 
         let auth = if config.auth_enabled {
-            ProxyAuth::new(true, config.auth_username.clone(), config.auth_password.clone())
+            ProxyAuth::new(
+                true,
+                config.auth_username.clone(),
+                config.auth_password.clone(),
+            )
         } else {
             ProxyAuth::disabled()
         };

@@ -18,14 +18,16 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
             sqlx::raw_sql(sql)
                 .execute(pool)
                 .await
-                .map_err(|e| {
-                    RotaError::Database(e)
-                })?;
+                .map_err(|e| RotaError::Database(e))?;
 
             // Record migration
             record_migration(pool, version, name).await?;
 
-            info!(version = version, name = name, "Migration applied successfully");
+            info!(
+                version = version,
+                name = name,
+                "Migration applied successfully"
+            );
         }
     }
 
@@ -52,13 +54,12 @@ async fn create_migrations_table(pool: &PgPool) -> Result<()> {
 
 /// Check if a migration has been applied
 async fn is_migration_applied(pool: &PgPool, version: i32) -> Result<bool> {
-    let result = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM schema_migrations WHERE version = $1",
-    )
-    .bind(version)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| RotaError::Database(e))?;
+    let result =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM schema_migrations WHERE version = $1")
+            .bind(version)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| RotaError::Database(e))?;
 
     Ok(result > 0)
 }

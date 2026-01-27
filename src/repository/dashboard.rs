@@ -16,12 +16,11 @@ impl DashboardRepository {
     /// Get dashboard statistics
     pub async fn get_stats(&self) -> Result<DashboardStats> {
         // Get proxy counts
-        let active_proxies = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM proxies WHERE status = 'active'",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let active_proxies =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM proxies WHERE status = 'active'")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
         let total_proxies = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM proxies")
             .fetch_one(&self.pool)
@@ -29,12 +28,11 @@ impl DashboardRepository {
             .unwrap_or(0);
 
         // Get request statistics
-        let total_requests = sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(SUM(requests), 0) FROM proxies",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let total_requests =
+            sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(requests), 0) FROM proxies")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
         // Get average success rate
         let avg_success_rate: f64 = sqlx::query_scalar(

@@ -116,7 +116,11 @@ pub async fn export_logs(
                                 log.timestamp,
                                 log.level,
                                 log.message.replace(',', ";").replace('\n', " "),
-                                log.details.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
+                                log.details
+                                    .as_deref()
+                                    .unwrap_or("")
+                                    .replace(',', ";")
+                                    .replace('\n', " "),
                             )
                         } else {
                             let prefix = if first { "" } else { "," };
@@ -137,10 +141,12 @@ pub async fn export_logs(
                     page += 1;
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))).await;
+                    let _ = tx
+                        .send(Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            e.to_string(),
+                        )))
+                        .await;
                     return;
                 }
             }

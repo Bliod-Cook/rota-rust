@@ -12,6 +12,7 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Health check (no auth required)
         .route("/health", get(handlers::health::health_check))
+        .route("/api/status", get(handlers::health::status))
         // Auth routes
         .route("/api/auth/login", post(handlers::auth::login))
         // Protected routes
@@ -38,7 +39,10 @@ fn protected_routes() -> Router<AppState> {
         // Dashboard
         .route("/dashboard/stats", get(handlers::dashboard::get_stats))
         .route("/dashboard/chart", get(handlers::dashboard::get_chart_data))
-        .route("/dashboard/system", get(handlers::dashboard::get_system_metrics))
+        .route(
+            "/dashboard/system",
+            get(handlers::dashboard::get_system_metrics),
+        )
         // WebSocket endpoints
         .route("/ws/dashboard", get(websocket::dashboard::dashboard_ws))
         .route("/ws/logs", get(websocket::logs::logs_ws))

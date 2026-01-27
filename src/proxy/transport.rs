@@ -53,9 +53,12 @@ impl ProxyTransport {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let mut stream = stream;
-        stream.write_all(connect_request.as_bytes()).await.map_err(|e| {
-            RotaError::ProxyConnectionFailed(format!("Failed to send CONNECT: {}", e))
-        })?;
+        stream
+            .write_all(connect_request.as_bytes())
+            .await
+            .map_err(|e| {
+                RotaError::ProxyConnectionFailed(format!("Failed to send CONNECT: {}", e))
+            })?;
 
         // Read response
         let mut response = vec![0u8; 1024];

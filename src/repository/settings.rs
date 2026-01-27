@@ -19,11 +19,10 @@ impl SettingsRepository {
 
     /// Get all settings
     pub async fn get_all(&self) -> Result<Settings> {
-        let records = sqlx::query_as::<_, SettingsRecord>(
-            "SELECT key, value, updated_at FROM settings",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let records =
+            sqlx::query_as::<_, SettingsRecord>("SELECT key, value, updated_at FROM settings")
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut settings = Settings::default();
 
@@ -69,10 +68,13 @@ impl SettingsRepository {
         .bind(key)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| RotaError::SettingsNotFound { key: key.to_string() })?;
+        .ok_or_else(|| RotaError::SettingsNotFound {
+            key: key.to_string(),
+        })?;
 
-        let value = serde_json::from_value(record.value)
-            .map_err(|e| RotaError::Internal(format!("Failed to parse setting '{}': {}", key, e)))?;
+        let value = serde_json::from_value(record.value).map_err(|e| {
+            RotaError::Internal(format!("Failed to parse setting '{}': {}", key, e))
+        })?;
 
         Ok(value)
     }
@@ -125,11 +127,13 @@ impl SettingsRepository {
 
     /// Update all settings
     pub async fn update_all(&self, settings: &Settings) -> Result<()> {
-        self.set(keys::AUTHENTICATION, &settings.authentication).await?;
+        self.set(keys::AUTHENTICATION, &settings.authentication)
+            .await?;
         self.set(keys::ROTATION, &settings.rotation).await?;
         self.set(keys::RATE_LIMIT, &settings.rate_limit).await?;
         self.set(keys::HEALTHCHECK, &settings.healthcheck).await?;
-        self.set(keys::LOG_RETENTION, &settings.log_retention).await?;
+        self.set(keys::LOG_RETENTION, &settings.log_retention)
+            .await?;
 
         info!("Updated all settings");
         Ok(())

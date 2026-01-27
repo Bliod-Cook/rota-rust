@@ -70,7 +70,8 @@ impl ProxyAuth {
             .decode(encoded)
             .map_err(|_| RotaError::AuthenticationFailed)?;
 
-        let credentials = String::from_utf8(decoded).map_err(|_| RotaError::AuthenticationFailed)?;
+        let credentials =
+            String::from_utf8(decoded).map_err(|_| RotaError::AuthenticationFailed)?;
 
         let (user, pass) = credentials
             .split_once(':')
