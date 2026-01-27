@@ -15,7 +15,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
             info!(version = version, name = name, "Applying migration");
 
             // Execute migration
-            sqlx::query(sql)
+            sqlx::raw_sql(sql)
                 .execute(pool)
                 .await
                 .map_err(|e| {
