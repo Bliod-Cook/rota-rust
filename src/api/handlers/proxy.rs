@@ -78,8 +78,7 @@ pub async fn create_proxy(
     let proxy = repo.create(&req).await?;
 
     // Refresh selector with new proxy list
-    let proxies = repo.get_all_usable().await?;
-    state.selector.refresh(proxies).await?;
+    refresh_selector(&state, &repo).await?;
 
     info!(id = proxy.id, address = %proxy.address, "Created proxy");
 
@@ -99,8 +98,7 @@ pub async fn update_proxy(
     match proxy {
         Some(p) => {
             // Refresh selector with updated proxy list
-            let proxies = repo.get_all_usable().await?;
-            state.selector.refresh(proxies).await?;
+            refresh_selector(&state, &repo).await?;
 
             info!(id = p.id, address = %p.address, "Updated proxy");
             Ok(Json(p))
@@ -123,8 +121,7 @@ pub async fn delete_proxy(
 
     if deleted {
         // Refresh selector
-        let proxies = repo.get_all_usable().await?;
-        state.selector.refresh(proxies).await?;
+        refresh_selector(&state, &repo).await?;
 
         info!(id = id, "Deleted proxy");
         Ok(StatusCode::NO_CONTENT)
@@ -169,8 +166,7 @@ pub async fn toggle_proxy(
             match updated {
                 Some(updated_proxy) => {
                     // Refresh selector
-                    let proxies = repo.get_all_usable().await?;
-                    state.selector.refresh(proxies).await?;
+                    refresh_selector(&state, &repo).await?;
 
                     info!(
                         id = updated_proxy.id,
@@ -190,4 +186,15 @@ pub async fn toggle_proxy(
             id
         ))),
     }
+}
+
+async fn refresh_selector(state: &AppState, repo: &ProxyRepository) -> Result<(), RotaError> {
+    let remove_unhealthy = state.settings_tx.borrow().rotation.remove_unhealthy;
+    let proxies = if remove_unhealthy {
+        repo.get_all_usable().await?
+    } else {
+        repo.get_all().await?
+    };
+    state.selector.refresh(proxies).await?;
+    Ok(())
 }
