@@ -96,6 +96,9 @@ mod tests {
             avg_response_time: 0,
             last_check: None,
             last_error: None,
+            auto_delete_after_failed_seconds: None,
+            invalid_since: None,
+            failure_reasons: serde_json::Value::Array(Vec::new()),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

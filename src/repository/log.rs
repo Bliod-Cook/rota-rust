@@ -64,7 +64,10 @@ impl LogRepository {
             count_query.push(" AND timestamp <= ").push_bind(end_time);
         }
 
-        let total: i64 = count_query.build_query_scalar().fetch_one(&self.pool).await?;
+        let total: i64 = count_query
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await?;
 
         // Data query
         let mut data_query = QueryBuilder::<Postgres>::new(
@@ -99,10 +102,7 @@ impl LogRepository {
             .push(" OFFSET ")
             .push_bind(offset);
 
-        let logs: Vec<Log> = data_query
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await?;
+        let logs: Vec<Log> = data_query.build_query_as().fetch_all(&self.pool).await?;
 
         Ok(PaginatedResponse::new(logs, total, page, limit))
     }

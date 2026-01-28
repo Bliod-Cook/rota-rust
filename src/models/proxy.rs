@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::FromRow;
 
 /// Proxy protocol type
@@ -112,6 +113,12 @@ pub struct Proxy {
     pub last_check: Option<DateTime<Utc>>,
     #[serde(skip_serializing)]
     pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_delete_after_failed_seconds: Option<i32>,
+    #[serde(skip_serializing)]
+    pub invalid_since: Option<DateTime<Utc>>,
+    #[serde(skip_serializing)]
+    pub failure_reasons: Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -217,6 +224,7 @@ pub struct CreateProxyRequest {
     pub protocol: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub auto_delete_after_failed_seconds: Option<i32>,
 }
 
 /// Request to update an existing proxy
@@ -227,6 +235,40 @@ pub struct UpdateProxyRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub status: Option<String>,
+}
+
+/// Archived proxy (automatically deleted and moved out of the active pool)
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct DeletedProxy {
+    pub id: i32,
+    pub address: String,
+    pub protocol: String,
+    #[serde(skip_serializing)]
+    pub username: Option<String>,
+    #[serde(skip_serializing)]
+    pub password: Option<String>,
+    pub status: String,
+    pub requests: i64,
+    pub successful_requests: i64,
+    pub failed_requests: i64,
+    pub avg_response_time: i32,
+    pub last_check: Option<DateTime<Utc>>,
+    #[serde(skip_serializing)]
+    pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_delete_after_failed_seconds: Option<i32>,
+    pub invalid_since: Option<DateTime<Utc>>,
+    pub deleted_at: DateTime<Utc>,
+    pub failure_reasons: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Deleted proxies list query parameters
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DeletedProxyListParams {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
 }
 
 /// Bulk create proxies request
@@ -295,6 +337,9 @@ mod tests {
             avg_response_time: 0,
             last_check: None,
             last_error: None,
+            auto_delete_after_failed_seconds: None,
+            invalid_since: None,
+            failure_reasons: serde_json::Value::Array(Vec::new()),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

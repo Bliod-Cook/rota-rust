@@ -235,6 +235,12 @@ impl ProxyServerBuilder {
         let selector = self.selector.expect("Proxy selector is required");
         let db_pool = self.db_pool.expect("Database pool is required");
         let rate_limiter = self.rate_limiter.unwrap_or_else(RateLimiter::disabled);
-        ProxyServer::new(self.config, selector, db_pool, self.log_sender, rate_limiter)
+        ProxyServer::new(
+            self.config,
+            selector,
+            db_pool,
+            self.log_sender,
+            rate_limiter,
+        )
     }
 }

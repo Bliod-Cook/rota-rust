@@ -9,7 +9,9 @@ use tracing::info;
 
 use crate::api::server::AppState;
 use crate::error::RotaError;
-use crate::models::{CreateProxyRequest, ProxyListParams, UpdateProxyRequest};
+use crate::models::{
+    BulkCreateProxiesRequest, CreateProxyRequest, ProxyListParams, UpdateProxyRequest,
+};
 use crate::proxy::rotation::ProxySelector;
 use crate::repository::ProxyRepository;
 
@@ -74,6 +76,13 @@ pub async fn create_proxy(
     if req.address.is_empty() {
         return Err(RotaError::InvalidRequest("Address is required".to_string()));
     }
+    if let Some(seconds) = req.auto_delete_after_failed_seconds {
+        if seconds < 0 {
+            return Err(RotaError::InvalidRequest(
+                "auto_delete_after_failed_seconds must be >= 0".to_string(),
+            ));
+        }
+    }
 
     let proxy = repo.create(&req).await?;
 
@@ -83,6 +92,41 @@ pub async fn create_proxy(
     info!(id = proxy.id, address = %proxy.address, "Created proxy");
 
     Ok((StatusCode::CREATED, Json(proxy)))
+}
+
+/// Bulk create proxies
+pub async fn bulk_create_proxies(
+    State(state): State<AppState>,
+    Json(req): Json<BulkCreateProxiesRequest>,
+) -> Result<impl IntoResponse, RotaError> {
+    let repo = ProxyRepository::new(state.db.pool().clone());
+
+    if req.proxies.is_empty() {
+        return Err(RotaError::InvalidRequest(
+            "Proxies list must not be empty".to_string(),
+        ));
+    }
+
+    for proxy in &req.proxies {
+        if proxy.address.is_empty() {
+            return Err(RotaError::InvalidRequest("Address is required".to_string()));
+        }
+        if let Some(seconds) = proxy.auto_delete_after_failed_seconds {
+            if seconds < 0 {
+                return Err(RotaError::InvalidRequest(
+                    "auto_delete_after_failed_seconds must be >= 0".to_string(),
+                ));
+            }
+        }
+    }
+
+    let proxies = repo.bulk_create(&req.proxies).await?;
+
+    refresh_selector(&state, &repo).await?;
+
+    info!(count = proxies.len(), "Bulk created proxies");
+
+    Ok((StatusCode::CREATED, Json(proxies)))
 }
 
 /// Update a proxy

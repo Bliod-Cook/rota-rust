@@ -15,8 +15,8 @@ use crate::config::EgressProxyConfig;
 use crate::database::Database;
 use crate::error::Result;
 use crate::models::{Proxy, Settings};
-use crate::proxy::rotation::ProxySelector;
 use crate::proxy::egress;
+use crate::proxy::rotation::ProxySelector;
 use crate::proxy::transport::ProxyTransport;
 use crate::repository::ProxyRepository;
 
@@ -180,12 +180,7 @@ impl HealthChecker {
         // 1) connectivity to the proxy itself, and 2) the proxy's ability to reach the target.
         let connect_result = timeout(
             check_timeout,
-            ProxyTransport::connect(
-                proxy,
-                &target_host,
-                target_port,
-                self.egress_proxy.as_ref(),
-            ),
+            ProxyTransport::connect(proxy, &target_host, target_port, self.egress_proxy.as_ref()),
         )
         .await;
 

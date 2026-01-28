@@ -138,7 +138,10 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_slice(&body).expect("body must be valid json");
 
-        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("healthy"));
+        assert_eq!(
+            payload.get("status").and_then(|v| v.as_str()),
+            Some("healthy")
+        );
         assert_eq!(
             payload.get("service").and_then(|v| v.as_str()),
             Some("rota-proxy")

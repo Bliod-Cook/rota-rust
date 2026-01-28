@@ -34,9 +34,7 @@ impl ProxyTransport {
                 Self::connect_http(proxy, target_host, target_port, egress_proxy).await
             }
             "socks4" => Self::connect_socks4(proxy, target_host, target_port, egress_proxy).await,
-            "socks4a" => {
-                Self::connect_socks4a(proxy, target_host, target_port, egress_proxy).await
-            }
+            "socks4a" => Self::connect_socks4a(proxy, target_host, target_port, egress_proxy).await,
             "socks5" => Self::connect_socks5(proxy, target_host, target_port, egress_proxy).await,
             _ => Err(RotaError::UnsupportedProtocol(protocol)),
         }
@@ -148,8 +146,12 @@ impl ProxyTransport {
         let target_host = normalize_socks_host(target_host);
 
         let stream = if let Some(user_id) = proxy.username.as_deref() {
-            Socks4Stream::connect_with_userid_and_socket(socket, (target_host, target_port), user_id)
-                .await
+            Socks4Stream::connect_with_userid_and_socket(
+                socket,
+                (target_host, target_port),
+                user_id,
+            )
+            .await
         } else {
             Socks4Stream::connect_with_socket(socket, (target_host, target_port)).await
         }

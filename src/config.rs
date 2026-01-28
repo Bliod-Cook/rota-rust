@@ -242,9 +242,9 @@ fn parse_egress_proxy() -> Result<Option<EgressProxyConfig>> {
         }
     };
 
-    let host = url.host_str().ok_or_else(|| {
-        RotaError::InvalidConfig("ROTA_EGRESS_PROXY must include a host".into())
-    })?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| RotaError::InvalidConfig("ROTA_EGRESS_PROXY must include a host".into()))?;
 
     let port = match url.port() {
         Some(p) => p,

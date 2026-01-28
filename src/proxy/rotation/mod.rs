@@ -2,8 +2,8 @@
 //!
 //! This module provides various strategies for selecting proxies from the pool.
 
-mod least_conn;
 mod dynamic;
+mod least_conn;
 mod random;
 mod round_robin;
 mod time_based;

@@ -7,8 +7,8 @@
 //! - Health checking
 //! - Request/response handling with retry logic
 
-pub mod handler;
 pub mod egress;
+pub mod handler;
 pub mod health;
 pub mod middleware;
 pub mod rotation;

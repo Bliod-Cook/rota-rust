@@ -86,7 +86,8 @@ impl RateLimiter {
 
         let interval_secs = settings.interval.max(1) as u64;
         let max_requests = settings.max_requests.max(1) as u32;
-        let max_burst = NonZeroU32::new(max_requests).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+        let max_burst =
+            NonZeroU32::new(max_requests).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
 
         let mut replenish_1_per = Duration::from_secs(interval_secs) / max_burst.get();
         if replenish_1_per.is_zero() {
@@ -139,9 +140,10 @@ impl RateLimiter {
         let now_ms = now_ms();
         let quota = self.config.load().quota;
 
-        let entry = self.limiters.entry(client_ip.to_string()).or_insert_with(|| {
-            ClientLimiter::new(Arc::new(GovRateLimiter::direct(quota)), now_ms)
-        });
+        let entry = self
+            .limiters
+            .entry(client_ip.to_string())
+            .or_insert_with(|| ClientLimiter::new(Arc::new(GovRateLimiter::direct(quota)), now_ms));
 
         entry
             .last_seen_ms

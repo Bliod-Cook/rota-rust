@@ -26,10 +26,24 @@ fn protected_routes() -> Router<AppState> {
         // Proxy management
         .route("/proxies", get(handlers::proxy::list_proxies))
         .route("/proxies", post(handlers::proxy::create_proxy))
+        .route("/proxies/bulk", post(handlers::proxy::bulk_create_proxies))
         .route("/proxies/:id", get(handlers::proxy::get_proxy))
         .route("/proxies/:id", put(handlers::proxy::update_proxy))
         .route("/proxies/:id", delete(handlers::proxy::delete_proxy))
         .route("/proxies/:id/toggle", post(handlers::proxy::toggle_proxy))
+        // Deleted proxies archive
+        .route(
+            "/deleted_proxies",
+            get(handlers::deleted_proxy::list_deleted_proxies),
+        )
+        .route(
+            "/deleted_proxies/:id",
+            delete(handlers::deleted_proxy::delete_deleted_proxy),
+        )
+        .route(
+            "/deleted_proxies/:id/restore",
+            post(handlers::deleted_proxy::restore_deleted_proxy),
+        )
         // Settings
         .route("/settings", get(handlers::settings::get_settings))
         .route("/settings", put(handlers::settings::update_settings))

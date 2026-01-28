@@ -24,9 +24,14 @@ use config::Config;
 use database::Database;
 use proxy::health::{HealthChecker, HealthCheckerConfig, HealthCheckerHandle};
 use proxy::middleware::RateLimiter;
-use proxy::rotation::{create_selector, DynamicProxySelector, ProxySelector, RotationStrategy, TimeBasedSelector};
+use proxy::rotation::{
+    create_selector, DynamicProxySelector, ProxySelector, RotationStrategy, TimeBasedSelector,
+};
 use proxy::server::ProxyServer;
-use services::{LogCleanupConfig, LogCleanupHandle, LogCleanupService};
+use services::{
+    LogCleanupConfig, LogCleanupHandle, LogCleanupService, ProxyAutoDeleteConfig,
+    ProxyAutoDeleteHandle, ProxyAutoDeleteService,
+};
 
 #[tokio::main]
 async fn main() -> error::Result<()> {
@@ -73,7 +78,9 @@ async fn main() -> error::Result<()> {
     let strategy = RotationStrategy::from_str(&settings.rotation.method);
     let interval_secs = settings.rotation.time_based.interval.max(1) as u64;
     let base_selector: Arc<dyn ProxySelector> = match strategy {
-        RotationStrategy::TimeBased => Arc::new(TimeBasedSelector::with_interval(Duration::from_secs(interval_secs))),
+        RotationStrategy::TimeBased => Arc::new(TimeBasedSelector::with_interval(
+            Duration::from_secs(interval_secs),
+        )),
         _ => Arc::from(create_selector(strategy)),
     };
     let selector = Arc::new(DynamicProxySelector::new(base_selector));
@@ -114,7 +121,23 @@ async fn main() -> error::Result<()> {
     let cleanup_service = LogCleanupService::new(db.clone(), LogCleanupConfig::default());
     let cleanup_settings = settings_tx.subscribe();
     let cleanup_task = tokio::spawn(async move {
-        cleanup_service.run(cleanup_shutdown, cleanup_settings).await;
+        cleanup_service
+            .run(cleanup_shutdown, cleanup_settings)
+            .await;
+    });
+
+    // Start proxy auto-delete service
+    let (auto_delete_handle, auto_delete_shutdown) = ProxyAutoDeleteHandle::new();
+    let auto_delete_service = ProxyAutoDeleteService::new(
+        db.clone(),
+        selector.clone(),
+        ProxyAutoDeleteConfig::default(),
+    );
+    let auto_delete_settings = settings_tx.subscribe();
+    let auto_delete_task = tokio::spawn(async move {
+        auto_delete_service
+            .run(auto_delete_shutdown, auto_delete_settings)
+            .await;
     });
 
     // Create proxy server
@@ -166,9 +189,16 @@ async fn main() -> error::Result<()> {
     let _ = shutdown_tx.send(true);
     health_handle.shutdown();
     cleanup_handle.shutdown();
+    auto_delete_handle.shutdown();
 
     // Wait for all tasks to complete
-    let _ = tokio::join!(proxy_task, api_task, health_task, cleanup_task);
+    let _ = tokio::join!(
+        proxy_task,
+        api_task,
+        health_task,
+        cleanup_task,
+        auto_delete_task
+    );
 
     info!("Rota Proxy Server stopped");
     Ok(())

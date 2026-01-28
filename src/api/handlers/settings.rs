@@ -43,7 +43,8 @@ pub async fn update_settings(
 
     let strategy = RotationStrategy::from_str(&settings.rotation.method);
     let interval_secs = settings.rotation.time_based.interval.max(1) as u64;
-    state.selector
+    state
+        .selector
         .set_strategy(strategy, Duration::from_secs(interval_secs))
         .await?;
 

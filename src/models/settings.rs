@@ -194,7 +194,10 @@ mod tests {
         };
 
         let value = serde_json::to_value(&settings).unwrap();
-        assert_eq!(value.get("username").and_then(|v| v.as_str()), Some("admin"));
+        assert_eq!(
+            value.get("username").and_then(|v| v.as_str()),
+            Some("admin")
+        );
         assert_eq!(value.get("enabled").and_then(|v| v.as_bool()), Some(true));
         assert!(value.get("password").is_none());
 
@@ -227,11 +230,9 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("admin")
         );
-        assert!(
-            value
-                .get("authentication")
-                .and_then(|v| v.get("password"))
-                .is_none()
-        );
+        assert!(value
+            .get("authentication")
+            .and_then(|v| v.get("password"))
+            .is_none());
     }
 }

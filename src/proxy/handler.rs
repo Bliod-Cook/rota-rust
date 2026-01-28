@@ -119,8 +119,10 @@ impl ProxyHandler {
         let mut attempts = 0;
         let max_attempts = self.config.max_retries + 1;
         let mut last_error = None;
-        let mut selected: Option<(Arc<Proxy>, Box<dyn crate::proxy::transport::ProxyConnection>)> =
-            None;
+        let mut selected: Option<(
+            Arc<Proxy>,
+            Box<dyn crate::proxy::transport::ProxyConnection>,
+        )> = None;
 
         while attempts < max_attempts {
             attempts += 1;
@@ -260,7 +262,6 @@ impl ProxyHandler {
             .status(StatusCode::OK)
             .body(Full::new(Bytes::new()))
             .unwrap())
-
     }
 
     /// Handle regular HTTP request
@@ -435,8 +436,7 @@ impl ProxyHandler {
             egress::connect_to_addr(self.egress_proxy.as_ref(), &proxy.address),
         )
         .await
-        .map_err(|_| RotaError::Timeout)?
-        ?;
+        .map_err(|_| RotaError::Timeout)??;
 
         // Build request
         let mut builder = Request::builder()

@@ -24,6 +24,7 @@ impl ProxyRepository {
             SELECT id, address, protocol, username, password, status,
                    requests, successful_requests, failed_requests,
                    avg_response_time, last_check, last_error,
+                   auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                    created_at, updated_at
             FROM proxies
             WHERE id = $1
@@ -43,6 +44,7 @@ impl ProxyRepository {
             SELECT id, address, protocol, username, password, status,
                    requests, successful_requests, failed_requests,
                    avg_response_time, last_check, last_error,
+                   auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                    created_at, updated_at
             FROM proxies
             WHERE status IN ('active', 'idle')
@@ -62,6 +64,7 @@ impl ProxyRepository {
             SELECT id, address, protocol, username, password, status,
                    requests, successful_requests, failed_requests,
                    avg_response_time, last_check, last_error,
+                   auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                    created_at, updated_at
             FROM proxies
             ORDER BY address
@@ -100,7 +103,8 @@ impl ProxyRepository {
         };
 
         // Count query
-        let mut count_query = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM proxies WHERE 1=1");
+        let mut count_query =
+            QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM proxies WHERE 1=1");
         if let Some(ref status) = params.status {
             if !status.is_empty() {
                 count_query.push(" AND status = ").push_bind(status);
@@ -119,7 +123,10 @@ impl ProxyRepository {
             }
         }
 
-        let total: i64 = count_query.build_query_scalar().fetch_one(&self.pool).await?;
+        let total: i64 = count_query
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await?;
 
         // Data query
         let mut data_query = QueryBuilder::<Postgres>::new(
@@ -127,6 +134,7 @@ impl ProxyRepository {
             SELECT id, address, protocol, username, password, status,
                    requests, successful_requests, failed_requests,
                    avg_response_time, last_check, last_error,
+                   auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                    created_at, updated_at
             FROM proxies
             WHERE 1=1
@@ -161,10 +169,7 @@ impl ProxyRepository {
             .push(" OFFSET ")
             .push_bind(offset);
 
-        let proxies: Vec<Proxy> = data_query
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await?;
+        let proxies: Vec<Proxy> = data_query.build_query_as().fetch_all(&self.pool).await?;
 
         let data: Vec<ProxyWithStats> = proxies.into_iter().map(ProxyWithStats::from).collect();
 
@@ -175,11 +180,12 @@ impl ProxyRepository {
     pub async fn create(&self, req: &CreateProxyRequest) -> Result<Proxy> {
         let proxy = sqlx::query_as::<_, Proxy>(
             r#"
-            INSERT INTO proxies (address, protocol, username, password)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO proxies (address, protocol, username, password, auto_delete_after_failed_seconds)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id, address, protocol, username, password, status,
                       requests, successful_requests, failed_requests,
                       avg_response_time, last_check, last_error,
+                      auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                       created_at, updated_at
             "#,
         )
@@ -187,6 +193,7 @@ impl ProxyRepository {
         .bind(&req.protocol)
         .bind(&req.username)
         .bind(&req.password)
+        .bind(req.auto_delete_after_failed_seconds)
         .fetch_one(&self.pool)
         .await?;
 
@@ -211,11 +218,24 @@ impl ProxyRepository {
         let proxy = sqlx::query_as::<_, Proxy>(
             r#"
             UPDATE proxies
-            SET address = $2, protocol = $3, username = $4, password = $5, status = $6
+            SET address = $2,
+                protocol = $3,
+                username = $4,
+                password = $5,
+                status = $6,
+                invalid_since = CASE
+                    WHEN $6 = 'failed' THEN COALESCE(invalid_since, NOW())
+                    ELSE NULL
+                END,
+                failure_reasons = CASE
+                    WHEN $6 = 'failed' THEN failure_reasons
+                    ELSE '[]'::jsonb
+                END
             WHERE id = $1
             RETURNING id, address, protocol, username, password, status,
                       requests, successful_requests, failed_requests,
                       avg_response_time, last_check, last_error,
+                      auto_delete_after_failed_seconds, invalid_since, failure_reasons,
                       created_at, updated_at
             "#,
         )
@@ -283,6 +303,58 @@ impl ProxyRepository {
         Ok(deleted)
     }
 
+    /// Archive failed proxies whose continuous failure duration exceeds the configured threshold.
+    ///
+    /// Proxies are moved into `deleted_proxies` (not hard-deleted) and removed from `proxies`.
+    pub async fn archive_expired_failed(&self, limit: i64) -> Result<Vec<i32>> {
+        let limit = limit.clamp(1, 1000);
+
+        let archived: Vec<i32> = sqlx::query_scalar(
+            r#"
+            WITH candidates AS (
+                SELECT id
+                FROM proxies
+                WHERE status = 'failed'
+                  AND auto_delete_after_failed_seconds IS NOT NULL
+                  AND auto_delete_after_failed_seconds > 0
+                  AND invalid_since IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (NOW() - invalid_since)) >= auto_delete_after_failed_seconds
+                ORDER BY invalid_since ASC
+                LIMIT $1
+            ),
+            inserted AS (
+                INSERT INTO deleted_proxies (
+                    id, address, protocol, username, password, status,
+                    requests, successful_requests, failed_requests, avg_response_time,
+                    last_check, last_error,
+                    auto_delete_after_failed_seconds, invalid_since, deleted_at, failure_reasons,
+                    created_at, updated_at
+                )
+                SELECT p.id, p.address, p.protocol, p.username, p.password, p.status,
+                       p.requests, p.successful_requests, p.failed_requests, p.avg_response_time,
+                       p.last_check, p.last_error,
+                       p.auto_delete_after_failed_seconds, p.invalid_since, NOW(), p.failure_reasons,
+                       p.created_at, p.updated_at
+                FROM proxies p
+                JOIN candidates c ON c.id = p.id
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+            ),
+            deleted AS (
+                DELETE FROM proxies
+                WHERE id IN (SELECT id FROM inserted)
+                RETURNING id
+            )
+            SELECT id FROM deleted
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(archived)
+    }
+
     /// Update proxy statistics after a request
     pub async fn record_request(
         &self,
@@ -321,6 +393,24 @@ impl ProxyRepository {
                         WHEN (failed_requests + 1) >= 3 THEN 'failed'
                         ELSE status
                     END
+                END,
+                invalid_since = CASE
+                    WHEN $2 THEN NULL
+                    ELSE CASE
+                        WHEN status = 'failed' OR (failed_requests + 1) >= 3 THEN COALESCE(invalid_since, NOW())
+                        ELSE NULL
+                    END
+                END,
+                failure_reasons = CASE
+                    WHEN $2 THEN '[]'::jsonb
+                    ELSE append_failure_reason(
+                        failure_reasons,
+                        jsonb_build_object(
+                            'timestamp', NOW(),
+                            'source', 'request',
+                            'message', COALESCE($4, '')
+                        )
+                    )
                 END
             WHERE id = $1
             "#,
@@ -349,7 +439,22 @@ impl ProxyRepository {
             UPDATE proxies
             SET last_check = NOW(),
                 status = $2,
-                last_error = $3
+                last_error = $3,
+                invalid_since = CASE
+                    WHEN $2 = 'failed' THEN COALESCE(invalid_since, NOW())
+                    ELSE NULL
+                END,
+                failure_reasons = CASE
+                    WHEN $2 = 'failed' THEN append_failure_reason(
+                        failure_reasons,
+                        jsonb_build_object(
+                            'timestamp', NOW(),
+                            'source', 'healthcheck',
+                            'message', COALESCE($3, '')
+                        )
+                    )
+                    ELSE '[]'::jsonb
+                END
             WHERE id = $1
             "#,
         )

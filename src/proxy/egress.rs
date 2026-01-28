@@ -60,10 +60,7 @@ async fn connect_via_http_proxy(
     let mut stream = TcpStream::connect(proxy_addr).await?;
 
     let authority = format_connect_authority(target_host, target_port);
-    let mut request = format!(
-        "CONNECT {} HTTP/1.1\r\nHost: {}\r\n",
-        authority, authority
-    );
+    let mut request = format!("CONNECT {} HTTP/1.1\r\nHost: {}\r\n", authority, authority);
 
     if let Some(username) = &proxy.username {
         let password = proxy.password.as_deref().unwrap_or("");
@@ -120,8 +117,9 @@ async fn connect_via_socks5_proxy(
 
 fn parse_host_port(addr: &str) -> Result<(String, u16)> {
     // Use URL parsing to properly handle bracketed IPv6 like "[::1]:8080".
-    let url = url::Url::parse(&format!("http://{}", addr))
-        .map_err(|e| RotaError::InvalidProxyAddress(format!("Invalid address '{}': {}", addr, e)))?;
+    let url = url::Url::parse(&format!("http://{}", addr)).map_err(|e| {
+        RotaError::InvalidProxyAddress(format!("Invalid address '{}': {}", addr, e))
+    })?;
 
     let host = url.host_str().ok_or_else(|| {
         RotaError::InvalidProxyAddress(format!("Invalid address '{}': missing host", addr))
@@ -302,8 +300,7 @@ mod tests {
             client.read_exact(&mut dst_port).await.unwrap();
             let port = u16::from_be_bytes(dst_port);
 
-            let dest =
-                std::net::SocketAddr::from((std::net::Ipv4Addr::from(dst_ip), port));
+            let dest = std::net::SocketAddr::from((std::net::Ipv4Addr::from(dst_ip), port));
             assert_eq!(dest, target_addr);
 
             let mut server = TcpStream::connect(dest).await.unwrap();

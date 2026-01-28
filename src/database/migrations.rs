@@ -83,7 +83,12 @@ fn get_migrations() -> Vec<(i32, &'static str, &'static str)> {
         (2, "settings_table", MIGRATION_002_SETTINGS_TABLE),
         (3, "logs_table", MIGRATION_003_LOGS_TABLE),
         (4, "proxy_requests_table", MIGRATION_004_PROXY_REQUESTS),
-        (5, "drop_unique_proxy_address", MIGRATION_005_DROP_UNIQUE_PROXY_ADDRESS),
+        (
+            5,
+            "drop_unique_proxy_address",
+            MIGRATION_005_DROP_UNIQUE_PROXY_ADDRESS,
+        ),
+        (6, "deleted_proxies", MIGRATION_006_DELETED_PROXIES),
     ]
 }
 
@@ -198,4 +203,68 @@ CREATE INDEX IF NOT EXISTS idx_proxy_requests_success ON proxy_requests(success)
 // Migration 5: Allow duplicate proxy addresses
 const MIGRATION_005_DROP_UNIQUE_PROXY_ADDRESS: &str = r#"
 ALTER TABLE proxies DROP CONSTRAINT IF EXISTS unique_proxy_address;
+"#;
+
+// Migration 6: Deleted proxies archive + auto-delete metadata
+const MIGRATION_006_DELETED_PROXIES: &str = r#"
+-- Store per-proxy auto-delete settings and continuous failure tracking
+ALTER TABLE proxies
+    ADD COLUMN IF NOT EXISTS auto_delete_after_failed_seconds INTEGER,
+    ADD COLUMN IF NOT EXISTS invalid_since TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS failure_reasons JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- Helper for keeping last 5 failure reasons in JSONB array
+CREATE OR REPLACE FUNCTION append_failure_reason(existing JSONB, new_reason JSONB)
+RETURNS JSONB AS $$
+DECLARE
+    arr JSONB;
+    len INTEGER;
+BEGIN
+    arr := COALESCE(existing, '[]'::jsonb);
+    IF jsonb_typeof(arr) <> 'array' THEN
+        arr := '[]'::jsonb;
+    END IF;
+
+    len := jsonb_array_length(arr);
+
+    -- Keep last 4 existing reasons, then append the new one (max 5).
+    IF len >= 4 THEN
+        arr := (
+            SELECT COALESCE(jsonb_agg(elem ORDER BY ord), '[]'::jsonb)
+            FROM (
+                SELECT elem, ord
+                FROM jsonb_array_elements(arr) WITH ORDINALITY AS t(elem, ord)
+                WHERE ord > len - 4
+            ) s
+        );
+    END IF;
+
+    RETURN arr || jsonb_build_array(new_reason);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Archive table for automatically deleted proxies
+CREATE TABLE IF NOT EXISTS deleted_proxies (
+    id INTEGER PRIMARY KEY,
+    address VARCHAR(255) NOT NULL,
+    protocol VARCHAR(20) NOT NULL DEFAULT 'http',
+    username VARCHAR(255),
+    password VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'idle',
+    requests BIGINT NOT NULL DEFAULT 0,
+    successful_requests BIGINT NOT NULL DEFAULT 0,
+    failed_requests BIGINT NOT NULL DEFAULT 0,
+    avg_response_time INTEGER NOT NULL DEFAULT 0,
+    last_check TIMESTAMPTZ,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    auto_delete_after_failed_seconds INTEGER,
+    invalid_since TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    failure_reasons JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_proxies_invalid_since ON proxies(invalid_since);
+CREATE INDEX IF NOT EXISTS idx_deleted_proxies_deleted_at ON deleted_proxies(deleted_at DESC);
 "#;

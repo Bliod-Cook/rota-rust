@@ -1,6 +1,6 @@
+use crate::database::timescale;
 use crate::error::Result;
 use crate::models::{ChartData, ChartDataPoint, ChartTimeRange, DashboardStats};
-use crate::database::timescale;
 use sqlx::PgPool;
 
 /// Repository for dashboard statistics
