@@ -83,7 +83,7 @@ impl HealthChecker {
             tokio::select! {
                 _ = check_interval.tick() => {
                     let settings = settings_rx.borrow().clone();
-                    if let Err(e) = self.check_all_proxies(&settings).await {
+                    if let Err(e) = self.check_failed_proxies(&settings).await {
                         error!("Health check round failed: {}", e);
                     }
                 }
@@ -100,13 +100,13 @@ impl HealthChecker {
         }
     }
 
-    /// Check all proxies and update their health status
-    async fn check_all_proxies(&self, settings: &Settings) -> Result<()> {
+    /// Check failed proxies and update their health status
+    async fn check_failed_proxies(&self, settings: &Settings) -> Result<()> {
         let repo = ProxyRepository::new(self.db.pool().clone());
-        // Include failed proxies so they can recover when they become reachable again.
-        let proxies = repo.get_all().await?;
+        // Only check failed proxies so they can recover when they become reachable again.
+        let proxies = repo.get_all_failed().await?;
 
-        info!("Checking health of {} proxies", proxies.len());
+        info!("Checking health of {} failed proxies", proxies.len());
 
         let worker_count = settings.healthcheck.workers.max(1) as usize;
         let settings = settings.clone();

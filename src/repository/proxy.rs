@@ -57,6 +57,26 @@ impl ProxyRepository {
         Ok(proxies)
     }
 
+    /// Get all failed proxies
+    pub async fn get_all_failed(&self) -> Result<Vec<Proxy>> {
+        let proxies = sqlx::query_as::<_, Proxy>(
+            r#"
+            SELECT id, address, protocol, username, password, status,
+                   requests, successful_requests, failed_requests,
+                   avg_response_time, last_check, last_error,
+                   auto_delete_after_failed_seconds, invalid_since, failure_reasons,
+                   created_at, updated_at
+            FROM proxies
+            WHERE status = 'failed'
+            ORDER BY address
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(proxies)
+    }
+
     /// Get all proxies (including failed)
     pub async fn get_all(&self) -> Result<Vec<Proxy>> {
         let proxies = sqlx::query_as::<_, Proxy>(
