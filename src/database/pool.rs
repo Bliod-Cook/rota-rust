@@ -37,6 +37,11 @@ impl Database {
         Ok(Database { pool })
     }
 
+    /// Create a Database wrapper from an existing pool.
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     /// Get a reference to the connection pool
     pub fn pool(&self) -> &PgPool {
         &self.pool
