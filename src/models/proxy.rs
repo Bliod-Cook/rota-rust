@@ -101,9 +101,7 @@ pub struct Proxy {
     pub id: i32,
     pub address: String,
     pub protocol: String, // Stored as string in DB
-    #[serde(skip_serializing)]
     pub username: Option<String>,
-    #[serde(skip_serializing)]
     pub password: Option<String>,
     pub status: String, // Stored as string in DB
     pub requests: i64,
@@ -111,13 +109,9 @@ pub struct Proxy {
     pub failed_requests: i64,
     pub avg_response_time: i32,
     pub last_check: Option<DateTime<Utc>>,
-    #[serde(skip_serializing)]
     pub last_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_delete_after_failed_seconds: Option<i32>,
-    #[serde(skip_serializing)]
     pub invalid_since: Option<DateTime<Utc>>,
-    #[serde(skip_serializing)]
     pub failure_reasons: Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -445,6 +439,40 @@ mod tests {
 
         proxy.password = None;
         assert_eq!(proxy.url(), "http://user@1.2.3.4:1234");
+    }
+
+    #[test]
+    fn test_proxy_serialization_includes_all_fields() {
+        let mut proxy = base_proxy();
+        proxy.username = Some("user".to_string());
+        proxy.password = Some("pass".to_string());
+        proxy.last_error = Some("timeout".to_string());
+        proxy.auto_delete_after_failed_seconds = None;
+        proxy.invalid_since = Some(
+            DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        proxy.failure_reasons = serde_json::json!([{ "message": "timeout" }]);
+
+        let value = serde_json::to_value(&proxy).unwrap();
+
+        assert_eq!(value.get("username").and_then(|v| v.as_str()), Some("user"));
+        assert_eq!(value.get("password").and_then(|v| v.as_str()), Some("pass"));
+        assert_eq!(
+            value.get("last_error").and_then(|v| v.as_str()),
+            Some("timeout")
+        );
+        assert!(value
+            .get("auto_delete_after_failed_seconds")
+            .is_some_and(|v| v.is_null()));
+        assert_eq!(
+            value.get("failure_reasons"),
+            Some(&serde_json::json!([{ "message": "timeout" }]))
+        );
+        assert!(value
+            .get("invalid_since")
+            .is_some_and(|v| v.as_str().is_some()));
     }
 
     #[test]
